@@ -3,6 +3,7 @@ import sbt.Keys._
 import java.net.Socket
 import java.net.ServerSocket
 import java.nio.ByteBuffer
+import scala.util.Try
 
 object DebugPlugin extends Plugin {
     val debugStart = taskKey[Unit]("starts debugger proxy")
@@ -15,50 +16,86 @@ object DebugPlugin extends Plugin {
     val debugSettings = Seq(
         debugPort := 6006,
         debugClientPorts := Set(6007),
+        onLoad in Global := {
+            (onLoad in Global).value.andThen { state =>
+                val proxy = new DebugProxy(debugPort.value, debugClientPorts.value)
+                state.put(debugProxyAttribute, proxy)
+            }
+        },
+        onUnload in Global := {
+            (onUnload in Global).value.andThen { state =>
+                state.get(debugProxyAttribute).foreach { proxy =>
+                    proxy.stop
+                }
+                state.remove(debugProxyAttribute)
+            }
+        },
         debugStart := {
-            val proxy = state.value.get(debugProxyAttribute).getOrElse(
-                new DebugProxy(debugPort.value, debugClientPorts.value)
-            )
-            state.value.put(debugProxyAttribute, proxy)
+            state.value.get(debugProxyAttribute).foreach { proxy =>
+                proxy.start
+            }
         },
         debugStop := {
             state.value.get(debugProxyAttribute).foreach { proxy =>
                 proxy.stop
             }
-            state.value.remove(debugProxyAttribute)
         }
     )
 
     class DebugProxy(port: Int, val clientPorts: Set[Int]) {
-        val server = new ServerSocket(port)
-        private val thread = new DebugThread()
+        val HANDSHAKE = "JDWP-Handshake".toCharArray.map(_.toByte)
+        private var server: ServerSocket = null
+        private var thread: DebugThread = null
         private var connectedClients = Map[Int, Socket]()
         private var runThread = true
 
-        thread.start()
+        private var replayMessages = Vector[Array[Byte]]()
 
         def stop(): Unit = {
             runThread = false
             server.close
             connectedClients.values.foreach(_.close)
+            connectedClients = Map[Int, Socket]()
+            replayMessages = Vector[Array[Byte]]()
+        }
+
+        def start(): Unit = {
+            runThread = true
+            server = new ServerSocket(port)
+            thread = new DebugThread()
+
+            thread.start
         }
 
         private def getNewClientSockets(): Map[Int, Socket] = {
             val unConnectedClientPorts = clientPorts -- connectedClients.keys
             val connectionAttempts = unConnectedClientPorts.map { port =>
-                val attempt = new Socket(null: String, port)
+                val attempt = Try(new Socket(null: String, port))
 
                 (port, attempt)
             }.toMap
 
-            connectionAttempts.filter { case (port, attempt) =>
-                attempt.isConnected && !attempt.isClosed
+            val successfulConnections = connectionAttempts.filter { case (port, attempt) =>
+                attempt.isSuccess
             }
-            //TODO replay breakpoints
+
+            val newSocketMap = successfulConnections.mapValues(_.get)
+
+            newSocketMap.values.foreach { socket =>
+                socket.getOutputStream.write(HANDSHAKE)
+                socket.getInputStream.skip(HANDSHAKE.length)
+
+                replayMessages.foreach { message =>
+                    socket.getOutputStream.write(message)
+                }
+            }
+
+            newSocketMap
         }
 
         private def readMessage(socket: Socket): Array[Byte] = {
             val inputStream = socket.getInputStream
+
             if(inputStream.available > 4) {
                 val lengthBytes = Array.ofDim[Byte](4)
                 inputStream.read(lengthBytes)
@@ -82,11 +119,11 @@ object DebugPlugin extends Plugin {
                     val command = message(10)
                     command match {
                         // set
-                        case 1 => // TODO
+                        case 1 => replayMessages = replayMessages :+ message
                         // clear
-                        case 2 => // TODO
+                        case 2 => replayMessages = replayMessages :+ message
                         // clear all
-                        case 3 => // TODO
+                        case 3 => replayMessages = Vector[Array[Byte]]()
                         case _ => println("invalid breakpoint command")
                     }
                 }
@@ -97,6 +134,14 @@ object DebugPlugin extends Plugin {
             override def run(): Unit = {
                 while(runThread) {
                     val debuggerSocket = server.accept
+
+                    val debuggerInput = debuggerSocket.getInputStream
+                    val debuggerOutput = debuggerSocket.getOutputStream
+                    while(debuggerInput.available < HANDSHAKE.length) {
+                        Thread.sleep(100)
+                    }
+                    debuggerInput.skip(HANDSHAKE.length)
+                    debuggerOutput.write(HANDSHAKE)
 
                     while(debuggerSocket.isConnected && !debuggerSocket.isClosed) {
                         // invalidate closed clients
@@ -109,29 +154,35 @@ object DebugPlugin extends Plugin {
                         connectedClients = connectedClients ++ newConnectedClients
 
                         // send messages from debugger to clients
-                        val debuggerMessage = readMessage(debuggerSocket)
-                        connectedClients.values.foreach { clientSocket =>
-                            val clientOutputStream = clientSocket.getOutputStream
-                            clientOutputStream.write(debuggerMessage)
-                        }
+                        if(connectedClients.size > 0) {
+                            val debuggerMessage = readMessage(debuggerSocket)
+if(debuggerMessage.length > 0) println("DEBUGGER MESSAGE: " + debuggerMessage.mkString(" "))
+                            connectedClients.values.foreach { clientSocket =>
+                                val clientOutputStream = clientSocket.getOutputStream
+                                clientOutputStream.write(debuggerMessage)
+                            }
 
-                        // save breakpoint messages
-                        handleBreakPointMessage(debuggerMessage)
+                            // save breakpoint messages
+                            handleBreakPointMessage(debuggerMessage)
+                        }
 
                         // send messages from clients to debugger
                         val debuggerOutputStream = debuggerSocket.getOutputStream
                         connectedClients.values.foreach { clientSocket =>
                             val clientMessage = readMessage(clientSocket)
+if(clientMessage.length > 0) println("CLIENT MESSAGE: " + clientMessage.mkString(" "))
                             debuggerOutputStream.write(clientMessage)
                         }
                     }
 
                     debuggerSocket.close
 
-                    // TODO clear breakpoints
+                    replayMessages = Vector[Array[Byte]]()
+
                     connectedClients.foreach { case (port, socket) =>
                         socket.close
                     }
+                    connectedClients = Map[Int, Socket]()
                 }
             }
         }

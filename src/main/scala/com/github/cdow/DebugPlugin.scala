@@ -4,6 +4,8 @@ import java.net.Socket
 import java.net.ServerSocket
 import java.nio.ByteBuffer
 import scala.util.Try
+import java.io.InputStream
+import java.io.BufferedInputStream
 
 object DebugPlugin extends Plugin {
     val debugStart = taskKey[Unit]("starts debugger proxy")
@@ -93,9 +95,7 @@ object DebugPlugin extends Plugin {
             newSocketMap
         }
 
-        private def readMessage(socket: Socket): Array[Byte] = {
-            val inputStream = socket.getInputStream
-
+        private def readMessage(inputStream: InputStream): Array[Byte] = {
             if(inputStream.available > 4) {
                 val lengthBytes = Array.ofDim[Byte](4)
                 inputStream.read(lengthBytes)
@@ -130,6 +130,14 @@ object DebugPlugin extends Plugin {
             }
         }
 
+        private def peak(inStream: InputStream): Byte = {
+            inStream.mark(1)
+            val firstByte = inStream.read.asInstanceOf[Byte]
+            inStream.reset
+
+            firstByte
+        }
+
         private class DebugThread extends Thread {
             override def run(): Unit = {
                 while(runThread) {
@@ -142,37 +150,25 @@ object DebugPlugin extends Plugin {
                     }
                     debuggerInput.skip(HANDSHAKE.length)
                     debuggerOutput.write(HANDSHAKE)
+                    
+                    val debuggerReadThread = new DebuggerReadThread(debuggerSocket)
+                    debuggerReadThread.start
 
-                    while(debuggerSocket.isConnected && !debuggerSocket.isClosed) {
+                    while(!debuggerSocket.isClosed) {
                         // invalidate closed clients
                         connectedClients = connectedClients.filter { case (port, socket) =>
-                            socket.isConnected && !socket.isClosed
+                            !socket.isClosed
                         }
 
                         // look for new clients
                         val newConnectedClients = getNewClientSockets
                         connectedClients = connectedClients ++ newConnectedClients
-
-                        // send messages from debugger to clients
-                        if(connectedClients.size > 0) {
-                            val debuggerMessage = readMessage(debuggerSocket)
-if(debuggerMessage.length > 0) println("DEBUGGER MESSAGE: " + debuggerMessage.mkString(" "))
-                            connectedClients.values.foreach { clientSocket =>
-                                val clientOutputStream = clientSocket.getOutputStream
-                                clientOutputStream.write(debuggerMessage)
-                            }
-
-                            // save breakpoint messages
-                            handleBreakPointMessage(debuggerMessage)
+                        newConnectedClients.values.foreach { vmSocket =>
+                            val vmReadThread = new VmReadThread(debuggerSocket, vmSocket)
+                            vmReadThread.start
                         }
 
-                        // send messages from clients to debugger
-                        val debuggerOutputStream = debuggerSocket.getOutputStream
-                        connectedClients.values.foreach { clientSocket =>
-                            val clientMessage = readMessage(clientSocket)
-if(clientMessage.length > 0) println("CLIENT MESSAGE: " + clientMessage.mkString(" "))
-                            debuggerOutputStream.write(clientMessage)
-                        }
+                        Thread.sleep(100)
                     }
 
                     debuggerSocket.close
@@ -183,6 +179,50 @@ if(clientMessage.length > 0) println("CLIENT MESSAGE: " + clientMessage.mkString
                         socket.close
                     }
                     connectedClients = Map[Int, Socket]()
+                }
+            }
+        }
+
+        private class DebuggerReadThread(debuggerSocket: Socket) extends Thread {
+            override def run: Unit = {
+                val inputStream = new BufferedInputStream(debuggerSocket.getInputStream)
+
+                while(!debuggerSocket.isClosed) {
+                    val firstByte = peak(inputStream)
+                    if(firstByte == -1) {
+                        debuggerSocket.close
+                    } else {
+                        // send messages from debugger to VMs
+                        if(connectedClients.size > 0) {
+                            val debuggerMessage = readMessage(inputStream)
+if(debuggerMessage.length > 0) println("DEBUGGER MESSAGE: " + debuggerMessage.mkString(" "))
+                            connectedClients.values.foreach { vmSocket =>
+                                val vmOutputStream = vmSocket.getOutputStream
+                                vmOutputStream.write(debuggerMessage)
+                            }
+
+                            // save breakpoint messages
+                            handleBreakPointMessage(debuggerMessage)
+                        }
+                    }
+                }
+            }
+        }
+
+        private class VmReadThread(debuggerSocket: Socket, vmSocket: Socket) extends Thread {
+            override def run: Unit = {
+                val inputStream = new BufferedInputStream(vmSocket.getInputStream)
+                while(!vmSocket.isClosed) {
+                    val firstByte = peak(inputStream)
+                    if(firstByte == -1) {
+                        vmSocket.close
+                    } else {
+                        // send messages from VMs to debugger
+                        val debuggerOutputStream = debuggerSocket.getOutputStream
+                        val vmMessage = readMessage(inputStream)
+if(vmMessage.length > 0) println("VM MESSAGE: " + vmMessage.mkString(" "))
+                        debuggerOutputStream.write(vmMessage)
+                    }
                 }
             }
         }

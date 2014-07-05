@@ -11,16 +11,16 @@ object DebugPlugin extends Plugin {
     val debugStart = taskKey[Unit]("starts debugger proxy")
     val debugStop = taskKey[Unit]("stops debugger proxy")
     val debugPort = settingKey[Int]("port to attache your debugger to")
-    val debugClientPorts = settingKey[Set[Int]]("open debugger ports for child applications")
+    val debugVmPorts = settingKey[Set[Int]]("VM debug ports to connect to")
 
     private val debugProxyAttribute = AttributeKey[DebugProxy]("debugProxy")
 
     val debugSettings = Seq(
         debugPort := 6006,
-        debugClientPorts := Set(6007),
+        debugVmPorts := Set(6007),
         onLoad in Global := {
             (onLoad in Global).value.andThen { state =>
-                val proxy = new DebugProxy(debugPort.value, debugClientPorts.value)
+                val proxy = new DebugProxy(debugPort.value, debugVmPorts.value)
                 state.put(debugProxyAttribute, proxy)
             }
         },
@@ -44,11 +44,11 @@ object DebugPlugin extends Plugin {
         }
     )
 
-    class DebugProxy(port: Int, val clientPorts: Set[Int]) {
+    class DebugProxy(port: Int, val vmPorts: Set[Int]) {
         val HANDSHAKE = "JDWP-Handshake".toCharArray.map(_.toByte)
         private var server: ServerSocket = null
         private var thread: DebugThread = null
-        private var connectedClients = Map[Int, Socket]()
+        private var connectedVms = Map[Int, Socket]()
         private var runThread = true
 
         private var replayMessages = Vector[Array[Byte]]()
@@ -56,8 +56,8 @@ object DebugPlugin extends Plugin {
         def stop(): Unit = {
             runThread = false
             server.close
-            connectedClients.values.foreach(_.close)
-            connectedClients = Map[Int, Socket]()
+            connectedVms.values.foreach(_.close)
+            connectedVms = Map[Int, Socket]()
             replayMessages = Vector[Array[Byte]]()
         }
 
@@ -69,9 +69,9 @@ object DebugPlugin extends Plugin {
             thread.start
         }
 
-        private def getNewClientSockets(): Map[Int, Socket] = {
-            val unConnectedClientPorts = clientPorts -- connectedClients.keys
-            val connectionAttempts = unConnectedClientPorts.map { port =>
+        private def getNewVmSockets(): Map[Int, Socket] = {
+            val unConnectedVmPorts = vmPorts -- connectedVms.keys
+            val connectionAttempts = unConnectedVmPorts.map { port =>
                 val attempt = Try(new Socket(null: String, port))
 
                 (port, attempt)
@@ -155,15 +155,15 @@ object DebugPlugin extends Plugin {
                     debuggerReadThread.start
 
                     while(!debuggerSocket.isClosed) {
-                        // invalidate closed clients
-                        connectedClients = connectedClients.filter { case (port, socket) =>
+                        // invalidate closed VM connections
+                        connectedVms = connectedVms.filter { case (port, socket) =>
                             !socket.isClosed
                         }
 
-                        // look for new clients
-                        val newConnectedClients = getNewClientSockets
-                        connectedClients = connectedClients ++ newConnectedClients
-                        newConnectedClients.values.foreach { vmSocket =>
+                        // look for new VM connections
+                        val newConnectedVms = getNewVmSockets
+                        connectedVms = connectedVms ++ newConnectedVms
+                        newConnectedVms.values.foreach { vmSocket =>
                             val vmReadThread = new VmReadThread(debuggerSocket, vmSocket)
                             vmReadThread.start
                         }
@@ -175,10 +175,10 @@ object DebugPlugin extends Plugin {
 
                     replayMessages = Vector[Array[Byte]]()
 
-                    connectedClients.foreach { case (port, socket) =>
+                    connectedVms.foreach { case (port, socket) =>
                         socket.close
                     }
-                    connectedClients = Map[Int, Socket]()
+                    connectedVms = Map[Int, Socket]()
                 }
             }
         }
@@ -193,10 +193,10 @@ object DebugPlugin extends Plugin {
                         debuggerSocket.close
                     } else {
                         // send messages from debugger to VMs
-                        if(connectedClients.size > 0) {
+                        if(connectedVms.size > 0) {
                             val debuggerMessage = readMessage(inputStream)
 if(debuggerMessage.length > 0) println("DEBUGGER MESSAGE: " + debuggerMessage.mkString(" "))
-                            connectedClients.values.foreach { vmSocket =>
+                            connectedVms.values.foreach { vmSocket =>
                                 val vmOutputStream = vmSocket.getOutputStream
                                 vmOutputStream.write(debuggerMessage)
                             }

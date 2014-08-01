@@ -1,3 +1,5 @@
+package com.github.cdow
+
 import sbt._
 import sbt.Keys._
 import java.net.Socket
@@ -7,6 +9,7 @@ import scala.util.Try
 import java.io.InputStream
 import java.io.BufferedInputStream
 import java.util.Arrays
+import ByteUtils._
 
 object DebugPlugin extends Plugin {
     val debugStart = taskKey[Unit]("starts debugger proxy")
@@ -45,9 +48,9 @@ object DebugPlugin extends Plugin {
         }
     )
 
-    case class BreakPoint(val id: Integer, val requestId: Integer, val originalMessage: Array[Byte])
+    case class BreakPoint(requestId: Integer, originalMessage: CommandPacket)
 
-    case class IdSizes(val fieldId: Int, val methodId: Int, val objectId: Int, val referenceTypeId: Int, val frameId: Int) 
+    case class IdSizes(fieldId: Int, methodId: Int, objectId: Int, referenceTypeId: Int, frameId: Int) 
     
     class DebugProxy(port: Int, val vmPorts: Set[Int]) {
         val HANDSHAKE = "JDWP-Handshake".toCharArray.map(_.toByte)
@@ -101,32 +104,24 @@ object DebugPlugin extends Plugin {
         
         private def getIdSizes(vmSocket: Socket): IdSizes = {
             vmSocket.getOutputStream.write(ID_SIZE_REQUEST)
-            var response = Array.empty[Byte]
-            while(response.isEmpty) {
+            var response: JdwpPacket = null
+            while(response == null) {
                 val responseMessage = readMessage(vmSocket.getInputStream)
-                if(!responseMessage.isEmpty && bytesToInt(ID_SIZE_REQUEST_ID) == bytesToInt(responseMessage.slice(4, 8))) {
+                if(responseMessage != null && bytesToInt(ID_SIZE_REQUEST_ID) == responseMessage.id) {
                     response = responseMessage
                 }
             }
-println("ID SIZE RESPONSE: " + response.mkString(" "))
-            val fieldIdSize = bytesToInt(response.slice(11, 15))
-            val methodIdSize = bytesToInt(response.slice(15, 19))
-            val objectIdSize = bytesToInt(response.slice(19, 23))
-            val referenceTyepIdSize = bytesToInt(response.slice(23, 27))
-            val frameIdSize = bytesToInt(response.slice(27, 31))
+println("ID SIZE RESPONSE: " + response)
+            val fieldIdSize = bytesToInt(response.data.slice(0, 4))
+            val methodIdSize = bytesToInt(response.data.slice(4, 8))
+            val objectIdSize = bytesToInt(response.data.slice(8, 12))
+            val referenceTyepIdSize = bytesToInt(response.data.slice(12, 16))
+            val frameIdSize = bytesToInt(response.data.slice(16, 20))
 
             IdSizes(fieldIdSize, methodIdSize, objectIdSize, referenceTyepIdSize, frameIdSize)
         }
         
-        private def bytesToInt(bytes: Array[Byte]): Int = {
-            ByteBuffer.wrap(bytes).getInt
-        }
-        
-        private def intToBytes(integer: Int): Array[Byte] = {
-            ByteBuffer.allocate(4).putInt(integer).array()
-        }
-
-        private def readMessage(inputStream: InputStream): Array[Byte] = {
+        private def readMessage(inputStream: InputStream): JdwpPacket = {
             if(inputStream.available > 4) {
                 val lengthBytes = Array.ofDim[Byte](4)
                 inputStream.read(lengthBytes)
@@ -136,35 +131,37 @@ println("ID SIZE RESPONSE: " + response.mkString(" "))
                 val bodyBytes = Array.ofDim[Byte](messageLength - 4)
                 inputStream.read(bodyBytes)
 
-                lengthBytes ++ bodyBytes
+                JdwpPacket(lengthBytes ++ bodyBytes)
             }
             else {
-                Array.empty[Byte]
+                null
             }
         }
 
-        private def handleBreakPointMessage(message: Array[Byte]): Unit = {
-            if(message.size > 0) {
-                // in breakpoint command group
-                if(message(9) == 15) {
-                    val command = message(10)
-                    val messageId = bytesToInt(message.slice(4, 8))
-                    command match {
-                        // set
-                        case 1 =>
-                            val requestId = nextRequestId
-                            nextRequestId += 1
-                            replayMessages = replayMessages :+ BreakPoint(messageId, requestId, message)
-                        // clear
-                        case 2 =>
-                            // TODO make clear work properly
-                            val requestId = nextRequestId
-                            nextRequestId += 1
-                            replayMessages = replayMessages :+ BreakPoint(messageId, requestId, message)
-                        // clear all
-                        case 3 => replayMessages = Vector[BreakPoint]()
-                        case _ => println("invalid breakpoint command")
+        private def handleBreakPointMessage(message: JdwpPacket): Unit = {
+            if(message != null) {
+                message match {
+                    case cp: CommandPacket =>
+                        // in breakpoint command group
+                        if(cp.commandSet == 15) {
+                            cp.command match {
+                                // set
+                                case 1 =>
+                                    val requestId = nextRequestId
+                                    nextRequestId += 1
+                                    replayMessages = replayMessages :+ BreakPoint(requestId, cp)
+                                // clear
+                                case 2 =>
+                                    // TODO make clear work properly
+                                    val requestId = nextRequestId
+                                    nextRequestId += 1
+                                    replayMessages = replayMessages :+ BreakPoint(requestId, cp)
+                                // clear all
+                                case 3 => replayMessages = Vector[BreakPoint]()
+                                case _ => println("invalid breakpoint command")
                     }
+                }
+                    case rp: ResponsePacket => // do nothing
                 }
             }
         }
@@ -205,7 +202,7 @@ println("ID SIZE RESPONSE: " + response.mkString(" "))
                             val idSizes = getIdSizes(vmSocket)
                             
                             replayMessages.foreach { breakPoint =>
-                                vmSocket.getOutputStream.write(breakPoint.originalMessage)
+                                vmSocket.getOutputStream.write(breakPoint.originalMessage.toBytes)
                             }
 
                             val vmReadThread = new VmReadThread(debuggerSocket, vmSocket, idSizes)
@@ -240,10 +237,10 @@ println("ID SIZE RESPONSE: " + response.mkString(" "))
                         // send messages from debugger to VMs
                         if(connectedVms.size > 0) {
                             val debuggerMessage = readMessage(inputStream)
-if(debuggerMessage.length > 0) println("DEBUGGER MESSAGE: " + debuggerMessage.mkString(" "))
+if(debuggerMessage != null) println("DEBUGGER MESSAGE: " + debuggerMessage)
                             connectedVms.values.foreach { vmSocket =>
                                 val vmOutputStream = vmSocket.getOutputStream
-                                vmOutputStream.write(debuggerMessage)
+                                vmOutputStream.write(debuggerMessage.toBytes)
                             }
 
                             // save breakpoint messages
@@ -270,11 +267,11 @@ if(debuggerMessage.length > 0) println("DEBUGGER MESSAGE: " + debuggerMessage.mk
                         // send messages from VMs to debugger
                         val debuggerOutputStream = debuggerSocket.getOutputStream
                         val vmMessage = readMessage(inputStream)
-if(vmMessage.length > 0) println("ORIGINAL VM MESSAGE: " + vmMessage.mkString(" "))
+if(vmMessage != null) println("ORIGINAL VM MESSAGE: " + vmMessage)
                         val vmMessageReplacedId = replaceRequestId(vmMessage)
 //                        if(!isVmDeathEvent(vmMessageReplacedId)) {
-if(vmMessage.length > 0) println("VM MESSAGE: " + vmMessageReplacedId.mkString(" "))
-                            debuggerOutputStream.write(vmMessageReplacedId)
+if(vmMessage != null) println("VM MESSAGE: " + vmMessageReplacedId)
+                            debuggerOutputStream.write(vmMessageReplacedId.toBytes)
 //                        }
                     }
                 }
@@ -285,29 +282,28 @@ if(vmMessage.length > 0) println("VM MESSAGE: " + vmMessageReplacedId.mkString("
                 message.length == 21 && message(10) == (100: Byte) && message(16) == (99: Byte)
             }
             
-            private def replaceRequestId(message: Array[Byte]): Array[Byte] = {
-                val messageId = bytesToInt(message.slice(4, 8))
-                
-                if(message(8) == (80: Byte)) {
-                    // reply message
-                    val breakPoint = replayMessages.find(_.id == messageId)
-                    breakPoint.map { bp =>
-                        val requestId = bp.requestId
-                        val prefix = message.take(11)
+            private def replaceRequestId(message: JdwpPacket): JdwpPacket = {
+                message match {
+                    case rp: ResponsePacket =>
+                        val breakPoint = replayMessages.find(_.originalMessage.id == message.id)
+                        breakPoint.map { bp =>
+                            val requestId = bp.requestId
                         
-                        val originalRequestId = bytesToInt(message.drop(11))
-                        requestIdMap = requestIdMap + (originalRequestId -> requestId)
+                            val originalRequestId = bytesToInt(message.data)
+                            requestIdMap = requestIdMap + (originalRequestId -> requestId)
                         
-                        prefix ++ intToBytes(requestId)
-                    }.getOrElse(message)
-                } else if(message(9) == (64: Byte) && message(10) == (100: Byte)) {
-                    // breakpoint triggered
-                    val prefix = message.take(16) // includes some data
-                    val data = message.slice(16, message.length)
+                            rp.copy(data = intToBytes(requestId))
+                        }.getOrElse(message)
+                    case cp: CommandPacket =>
+                        if(cp.commandSet == (64: Byte) && cp.command == (100: Byte)) {
+                            // breakpoint triggered
+                            val prefix = message.data.take(5) // includes some data
+                            val data = message.data.slice(5, message.length)
                     
-                    prefix ++ replaceCompositeRequestIds(data)
-                } else {
-                    message
+                            cp.copy(data = prefix ++ replaceCompositeRequestIds(data))
+                        } else {
+                            message
+                        }
                 }
             }
             

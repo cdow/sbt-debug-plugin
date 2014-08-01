@@ -1,1 +1,11 @@
+# SBT
 target/
+
+# Eclipse
+.cache
+.classpath
+.project
+.settings/
+
+# Ensime
+.ensime

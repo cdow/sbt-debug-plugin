@@ -2,7 +2,7 @@ package com.github.cdow
 import ByteUtils._
 
 object JdwpPacket {
-	val responseFlag: Byte = 80
+	val responseFlag: Byte = 0x80.toByte
 
 	def apply(packetBytes: Array[Byte]): JdwpPacket = {
 		val length = bytesToInt(packetBytes.slice(0, 4))

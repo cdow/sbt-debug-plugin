@@ -133,6 +133,7 @@ object DebugPlugin extends Plugin {
 
 				JdwpPacket(lengthBytes ++ bodyBytes)
 			} else {
+				// TODO stop using null
 				null
 			}
 		}
@@ -287,7 +288,8 @@ object DebugPlugin extends Plugin {
 				message match {
 					case rp: ResponsePacket =>
 						val breakPoint = replayMessages.find(_.originalMessage.id == message.id)
-						breakPoint.map { bp =>
+						// TODO handle errors
+						breakPoint.filter(_.originalMessage.command == 1 && rp.errorCode == 0).map { bp =>
 							val requestId = bp.requestId
 
 							val originalRequestId = bytesToInt(message.data)

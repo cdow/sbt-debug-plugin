@@ -8,7 +8,7 @@ object ByteUtils {
 	}
 
 	def intToBytes(integer: Int): Array[Byte] = {
-		ByteBuffer.allocate(4).putInt(integer).array()
+		ByteBuffer.allocate(4).putInt(integer).array
 	}
 
 	def bytesToShort(bytes: Array[Byte]): Short = {
@@ -16,6 +16,6 @@ object ByteUtils {
 	}
 
 	def shortToBytes(short: Short): Array[Byte] = {
-		ByteBuffer.allocate(2).putInt(short).array()
+		ByteBuffer.allocate(2).putShort(short).array
 	}
 }

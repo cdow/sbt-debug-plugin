@@ -10,6 +10,7 @@ import java.io.InputStream
 import java.io.BufferedInputStream
 import java.util.Arrays
 import ByteUtils._
+import com.github.cdow.responses._
 
 object DebugPlugin extends Plugin {
 	val debugStart = taskKey[Unit]("starts debugger proxy")
@@ -48,8 +49,6 @@ object DebugPlugin extends Plugin {
 		})
 
 	case class BreakPoint(requestId: Integer, originalMessage: CommandPacket)
-
-	case class IdSizes(fieldId: Int, methodId: Int, objectId: Int, referenceTypeId: Int, frameId: Int)
 
 	class DebugProxy(port: Int, val vmPorts: Set[Int]) {
 		val HANDSHAKE = "JDWP-Handshake".toCharArray.map(_.toByte)
@@ -111,14 +110,8 @@ object DebugPlugin extends Plugin {
 					response = responseMessage
 				}
 			}
-			println("ID SIZE RESPONSE: " + response)
-			val fieldIdSize = bytesToInt(response.data.slice(0, 4))
-			val methodIdSize = bytesToInt(response.data.slice(4, 8))
-			val objectIdSize = bytesToInt(response.data.slice(8, 12))
-			val referenceTyepIdSize = bytesToInt(response.data.slice(12, 16))
-			val frameIdSize = bytesToInt(response.data.slice(16, 20))
 
-			IdSizes(fieldIdSize, methodIdSize, objectIdSize, referenceTyepIdSize, frameIdSize)
+			JdwpCodecs.parseIdSizeResponse(response.data)
 		}
 
 		private def readMessage(inputStream: InputStream): JdwpPacket = {

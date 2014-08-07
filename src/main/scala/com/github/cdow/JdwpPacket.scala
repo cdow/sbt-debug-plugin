@@ -34,23 +34,23 @@ sealed trait JdwpPacket {
 }
 
 case class CommandPacket(
-	length: Int,
-	id: Int,
-	flags: Byte,
-	commandSet: Byte,
-	command: Byte,
-	data: Array[Byte]) extends JdwpPacket {
+		length: Int,
+		id: Int,
+		flags: Byte,
+		commandSet: Byte,
+		command: Byte,
+		data: Array[Byte]) extends JdwpPacket {
 	def toBytes: Array[Byte] = {
 		(ByteUtils.intToBytes(length) ++ ByteUtils.intToBytes(id) :+ flags :+ commandSet :+ command) ++ data
 	}
 }
 
 case class ResponsePacket(
-	length: Int,
-	id: Int,
-	flags: Byte,
-	errorCode: Short,
-	data: Array[Byte]) extends JdwpPacket {
+		length: Int,
+		id: Int,
+		flags: Byte,
+		errorCode: Short,
+		data: Array[Byte]) extends JdwpPacket {
 	def toBytes: Array[Byte] = {
 		(ByteUtils.intToBytes(length) ++ ByteUtils.intToBytes(id) :+ flags) ++ ByteUtils.shortToBytes(errorCode) ++ data
 	}

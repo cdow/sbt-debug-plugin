@@ -11,6 +11,8 @@ import java.io.BufferedInputStream
 import java.util.Arrays
 import ByteUtils._
 import com.github.cdow.responses._
+import com.github.cdow.commands._
+import scodec.bits.ByteVector
 
 object DebugPlugin extends Plugin {
 	val debugStart = taskKey[Unit]("starts debugger proxy")
@@ -48,7 +50,7 @@ object DebugPlugin extends Plugin {
 			}
 		})
 
-	case class BreakPoint(requestId: Integer, originalMessage: CommandPacket)
+	case class BreakPoint(requestId: Integer, originalMessage: JdwpPacket)
 
 	class DebugProxy(port: Int, val vmPorts: Set[Int]) {
 		val HANDSHAKE = "JDWP-Handshake".toCharArray.map(_.toByte)
@@ -111,7 +113,11 @@ object DebugPlugin extends Plugin {
 				}
 			}
 
-			JdwpCodecs.parseIdSizeResponse(response.data)
+			// TODO error handling better
+			response match {
+				case JdwpPacket(id, ResponsePacket(errors, data)) => JdwpCodecs.parseIdSizeResponse(data)
+				case _ => throw new Exception("this is not an id size reponse")
+			}
 		}
 
 		private def readMessage(inputStream: InputStream): JdwpPacket = {
@@ -124,35 +130,32 @@ object DebugPlugin extends Plugin {
 				val bodyBytes = Array.ofDim[Byte](messageLength - 4)
 				inputStream.read(bodyBytes)
 
-				JdwpPacket(lengthBytes ++ bodyBytes)
+				JdwpCodecs.decodePacket(lengthBytes ++ bodyBytes)
 			} else {
 				// TODO stop using null
 				null
 			}
 		}
 
-		private def handleBreakPointMessage(message: JdwpPacket): Unit = {
-			if (message != null) {
-				message match {
+		private def handleBreakPointMessage(packet: JdwpPacket): Unit = {
+			if (packet != null) {
+				packet.message match {
 					case cp: CommandPacket =>
-						// in breakpoint command group
-						if (cp.commandSet == 15) {
-							cp.command match {
-								// set
-								case 1 =>
-									val requestId = nextRequestId
-									nextRequestId += 1
-									replayMessages = replayMessages :+ BreakPoint(requestId, cp)
-								// clear
-								case 2 =>
-									// TODO make clear work properly
-									val requestId = nextRequestId
-									nextRequestId += 1
-									replayMessages = replayMessages :+ BreakPoint(requestId, cp)
-								// clear all
-								case 3 => replayMessages = Vector[BreakPoint]()
-								case _ => println("invalid breakpoint command")
-							}
+						cp.command match {
+							// set
+							case EventRequest.Set(_) =>
+								val requestId = nextRequestId
+								nextRequestId += 1
+								replayMessages = replayMessages :+ BreakPoint(requestId, packet)
+							// clear
+							case EventRequest.Clear(_) =>
+								// TODO make clear work properly
+								val requestId = nextRequestId
+								nextRequestId += 1
+								replayMessages = replayMessages :+ BreakPoint(requestId, packet)
+							// clear all
+							case EventRequest.ClearAllBreakpoints(_) => replayMessages = Vector[BreakPoint]()
+							case _ => // do nothing
 						}
 					case rp: ResponsePacket => // do nothing
 				}
@@ -196,7 +199,8 @@ object DebugPlugin extends Plugin {
 							val idSizes = getIdSizes(vmSocket)
 
 							replayMessages.foreach { breakPoint =>
-								vmSocket.getOutputStream.write(breakPoint.originalMessage.toBytes)
+println("BREAKPOINT: " + breakPoint)
+								vmSocket.getOutputStream.write(JdwpCodecs.encodePacket(breakPoint.originalMessage))
 							}
 
 							val vmReadThread = new VmReadThread(debuggerSocket, vmSocket, idSizes)
@@ -232,10 +236,10 @@ object DebugPlugin extends Plugin {
 						// send messages from debugger to VMs
 						if (connectedVms.size > 0) {
 							val debuggerMessage = readMessage(inputStream)
-							if (debuggerMessage != null) println("DEBUGGER MESSAGE: " + debuggerMessage)
+if (debuggerMessage != null) println("DEBUGGER MESSAGE: " + debuggerMessage)
 							connectedVms.values.foreach { vmSocket =>
 								val vmOutputStream = vmSocket.getOutputStream
-								vmOutputStream.write(debuggerMessage.toBytes)
+								vmOutputStream.write(JdwpCodecs.encodePacket(debuggerMessage))
 							}
 
 							// save breakpoint messages
@@ -262,11 +266,11 @@ object DebugPlugin extends Plugin {
 						// send messages from VMs to debugger
 						val debuggerOutputStream = debuggerSocket.getOutputStream
 						val vmMessage = readMessage(inputStream)
-						if (vmMessage != null) println("ORIGINAL VM MESSAGE: " + vmMessage)
+if (vmMessage != null) println("ORIGINAL VM MESSAGE: " + vmMessage)
 						val vmMessageReplacedId = replaceRequestId(vmMessage)
 						//                        if(!isVmDeathEvent(vmMessageReplacedId)) {
-						if (vmMessage != null) println("VM MESSAGE: " + vmMessageReplacedId)
-						debuggerOutputStream.write(vmMessageReplacedId.toBytes)
+if (vmMessage != null) println("VM MESSAGE: " + vmMessageReplacedId)
+						debuggerOutputStream.write(JdwpCodecs.encodePacket(vmMessageReplacedId))
 						//                        }
 					}
 				}
@@ -278,29 +282,27 @@ object DebugPlugin extends Plugin {
 			}
 
 			private def replaceRequestId(message: JdwpPacket): JdwpPacket = {
-				message match {
+				message.copy(message = message.message match {
 					case rp: ResponsePacket =>
 						val breakPoint = replayMessages.find(_.originalMessage.id == message.id)
 						// TODO handle errors
-						breakPoint.filter(_.originalMessage.command == 1 && rp.errorCode == 0).map { bp =>
+						breakPoint.filter(_.originalMessage.message.isInstanceOf[EventRequest.Set] && rp.errorCode == 0).map { bp =>
 							val requestId = bp.requestId
-
-							val originalRequestId = bytesToInt(message.data)
+println("ORIGINAL MESSAGE: " + bp.originalMessage)
+println("REPLY DATA: " + rp)
+							val originalRequestId = bytesToInt(rp.data.toArray)
 							requestIdMap = requestIdMap + (originalRequestId -> requestId)
 
-							rp.copy(data = intToBytes(requestId))
-						}.getOrElse(message)
-					case cp: CommandPacket =>
-						if (cp.commandSet == (64: Byte) && cp.command == (100: Byte)) {
-							// breakpoint triggered
-							val prefix = message.data.take(5) // includes some data
-							val data = message.data.slice(5, message.length)
+							rp.copy(data = ByteVector.fromInt(requestId))
+						}.getOrElse(rp)
+					case CommandPacket(Event.Composite(data)) =>
+						// breakpoint triggered
+						val prefix = data.take(5) // includes some data
+						val restData = data.slice(5, data.length)
 
-							cp.copy(data = prefix ++ replaceCompositeRequestIds(data))
-						} else {
-							message
-						}
-				}
+						CommandPacket(Event.Composite(prefix ++ replaceCompositeRequestIds(restData)))
+					case _ => message.message
+				})
 			}
 
 			val longSize = 8
@@ -313,9 +315,9 @@ object DebugPlugin extends Plugin {
 			val doubleSize = 8
 			val floatSize = 4
 
-			private def replaceCompositeRequestIds(data: Array[Byte]): Array[Byte] = {
+			private def replaceCompositeRequestIds(data: ByteVector): ByteVector = {
 				if (data.isEmpty) {
-					Array.empty
+					ByteVector.empty
 				} else {
 					val requestIdSize = 4
 					val threadIdSize = idSizes.objectId
@@ -343,16 +345,16 @@ object DebugPlugin extends Plugin {
 						case THREAD_DEATH => requestIdSize + threadIdSize
 						case CLASS_PREPARE =>
 							val prefix = requestIdSize + threadIdSize + byteSize + idSizes.referenceTypeId
-							val stringSize = intSize + bytesToInt(restData.drop(prefix).take(intSize))
+							val stringSize = intSize + restData.drop(prefix).take(intSize).toInt()
 							prefix + stringSize + intSize
 						case CLASS_UNLOAD =>
 							val prefix = requestIdSize
-							val stringSize = intSize + bytesToInt(restData.drop(prefix).take(intSize))
+							val stringSize = intSize + restData.drop(prefix).take(intSize).toInt()
 							prefix + stringSize
 						case FIELD_ACCESS => requestIdSize + threadIdSize + locationSize + byteSize + idSizes.referenceTypeId + idSizes.fieldId + taggedObjectId
 						case FIELD_MODIFICATION =>
 							val prefix = requestIdSize + threadIdSize + locationSize + byteSize + idSizes.referenceTypeId + idSizes.fieldId + taggedObjectId
-							val stringSize = intSize + bytesToInt(restData.drop(prefix).take(intSize))
+							val stringSize = intSize + restData.drop(prefix).take(intSize).toInt()
 							prefix + stringSize
 						case VM_DEATH => requestIdSize
 					})
@@ -360,12 +362,12 @@ object DebugPlugin extends Plugin {
 					val compositeMessage = restData.take(length)
 					val rest = restData.drop(length)
 
-					val compositeRequestId = bytesToInt(compositeMessage.take(requestIdSize))
+					val compositeRequestId = compositeMessage.take(requestIdSize).toInt()
 					val compositeMessageRest = compositeMessage.drop(requestIdSize)
 
 					val replacementRequestId = requestIdMap.get(compositeRequestId).getOrElse(compositeRequestId)
 
-					Array(dataType) ++ intToBytes(replacementRequestId) ++ compositeMessageRest ++ replaceCompositeRequestIds(rest)
+					ByteVector(dataType) ++ ByteVector.fromInt(replacementRequestId) ++ compositeMessageRest ++ replaceCompositeRequestIds(rest)
 				}
 			}
 

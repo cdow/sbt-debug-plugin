@@ -236,7 +236,7 @@ println("BREAKPOINT: " + breakPoint)
 						// send messages from debugger to VMs
 						if (connectedVms.size > 0) {
 							val debuggerMessage = readMessage(inputStream)
-if (debuggerMessage != null) println("DEBUGGER MESSAGE: " + debuggerMessage)
+if (debuggerMessage != null) println("DEBUGGER: " + debuggerMessage)
 							connectedVms.values.foreach { vmSocket =>
 								val vmOutputStream = vmSocket.getOutputStream
 								vmOutputStream.write(JdwpCodecs.encodePacket(debuggerMessage))
@@ -266,30 +266,34 @@ if (debuggerMessage != null) println("DEBUGGER MESSAGE: " + debuggerMessage)
 						// send messages from VMs to debugger
 						val debuggerOutputStream = debuggerSocket.getOutputStream
 						val vmMessage = readMessage(inputStream)
-if (vmMessage != null) println("ORIGINAL VM MESSAGE: " + vmMessage)
+if (vmMessage != null) println("ORIGINAL VM: " + vmMessage)
 						val vmMessageReplacedId = replaceRequestId(vmMessage)
-						//                        if(!isVmDeathEvent(vmMessageReplacedId)) {
-if (vmMessage != null) println("VM MESSAGE: " + vmMessageReplacedId)
-						debuggerOutputStream.write(JdwpCodecs.encodePacket(vmMessageReplacedId))
-						//                        }
+//						val vmMessageReplacedId = vmMessage
+						if(!isVmDeathEvent(vmMessageReplacedId)) {
+if (vmMessage != null) println("VM: " + vmMessageReplacedId)
+							debuggerOutputStream.write(JdwpCodecs.encodePacket(vmMessageReplacedId))
+						}
 					}
 				}
 			}
 
 			//TODO parse this properly
-			private def isVmDeathEvent(message: Array[Byte]): Boolean = {
-				message.length == 21 && message(10) == (100: Byte) && message(16) == (99: Byte)
+			private def isVmDeathEvent(message: JdwpPacket): Boolean = {
+				message.message match {
+					case CommandPacket(Event.Composite(data)) =>
+						data.length == 10 && data(5) == (99: Byte)
+					case _ => false
+				}
 			}
 
-			private def replaceRequestId(message: JdwpPacket): JdwpPacket = {
-				message.copy(message = message.message match {
+			private def replaceRequestId(packet: JdwpPacket): JdwpPacket = {
+				packet.copy(message = packet.message match {
 					case rp: ResponsePacket =>
-						val breakPoint = replayMessages.find(_.originalMessage.id == message.id)
-						// TODO handle errors
-						breakPoint.filter(_.originalMessage.message.isInstanceOf[EventRequest.Set] && rp.errorCode == 0).map { bp =>
+						val breakPoint = replayMessages.find(_.originalMessage.id == packet.id)
+
+						// TODO don't cast and handle errors
+						breakPoint.filter(_.originalMessage.message.asInstanceOf[CommandPacket].command.isInstanceOf[EventRequest.Set] && rp.errorCode == 0).map { bp =>
 							val requestId = bp.requestId
-println("ORIGINAL MESSAGE: " + bp.originalMessage)
-println("REPLY DATA: " + rp)
 							val originalRequestId = bytesToInt(rp.data.toArray)
 							requestIdMap = requestIdMap + (originalRequestId -> requestId)
 
@@ -301,7 +305,7 @@ println("REPLY DATA: " + rp)
 						val restData = data.slice(5, data.length)
 
 						CommandPacket(Event.Composite(prefix ++ replaceCompositeRequestIds(restData)))
-					case _ => message.message
+					case _ => packet.message
 				})
 			}
 

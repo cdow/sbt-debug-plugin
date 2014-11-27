@@ -1,9 +1,11 @@
 package com.github.cdow
 
 import com.github.cdow.responses.IdSizes
-import scodec.Codec
-import scodec.bits.ByteVector
-import scodec.codecs
+import scodec.{bits, DecodingContext, Codec, codecs}
+import scodec.bits.{BitVector, ByteVector}
+import scala.annotation.tailrec
+import scalaz.{\/, \/-}
+import shapeless.HNil
 
 object PrimitiveCodecs {
 	val byte: Codec[Byte] = codecs.bytes(1).xmap(_.get(0), { in => ByteVector(in) })
@@ -91,4 +93,51 @@ object PrimitiveCodecs {
 	// TODO figure out how to parse untagged values
 	//    untagged-value 	Variable 	A value as described above without the signature byte. This form is used when the signature information can be determined from context.
 	//    arrayregion 	Variable 	A compact representation of values used with some array operations. The first byte is a signature byte which is used to identify the type. See JDWP.Tag for the possible values of this byte. Next is a four-byte integer indicating the number of values in the sequence. This is followed by the values themselves: Primitive values are encoded as a sequence of untagged-values; Object values are encoded as a sequence of values.
+
+	val seqEmptyCodec: Codec[Seq[_]] = new Codec[Seq[_]] {
+		def encode(hn: Seq[_]) = \/-(BitVector.empty)
+		def decode(buffer: BitVector) = \/-((buffer, Seq.empty))
+	}
+
+	def times[A](times: Codec[Int], values: Codec[A]): Codec[Seq[A]] = new Codec[Seq[A]] {
+		def encode(a: Seq[A]) = {
+			val size = times.encode(a.size)
+			val contentsSeq = a.map(values.encode)
+			val contents = contentsSeq.reduce { (progress, value) =>
+				for {
+					encProgress <- progress
+					encValue <- value
+				} yield {
+					encProgress ++ encValue
+				}
+			}
+
+			for {
+				s <- size
+				c <- contents
+			} yield { s ++ c }
+		}
+
+		def decode(b: BitVector) = {
+			DecodingContext(times.decode).flatMap { size =>
+				decodeStep(size, DecodingContext.liftE(\/-(Seq())))
+			}.run(b)
+		}
+
+		@tailrec
+		private def decodeStep(numSteps: Int, currentContext: DecodingContext[Seq[A]]): DecodingContext[Seq[A]] = {
+			if (numSteps > 0) {
+				val newContext = for {
+					current <- currentContext
+					next <- DecodingContext(values.decode)
+				} yield {
+					current :+ next
+				}
+
+				decodeStep(numSteps - 1, newContext)
+			} else {
+				currentContext
+			}
+		}
+	}
 }

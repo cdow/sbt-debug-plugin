@@ -6,68 +6,62 @@ import scodec.bits.ByteVector
 import scodec.codecs
 
 object PrimitiveCodecs {
+	val byte: Codec[Byte] = codecs.bytes(1).xmap(_.get(0), { in => ByteVector(in) })
+	val boolean: Codec[Boolean] = codecs.bool(8)
+	val int: Codec[Int] = codecs.int(32)
+	val long: Codec[Long] = codecs.long(64)
+
 	sealed trait Value
 	case class ArrayId(objectId: ObjectId) extends Value
-	case class ByteValue(value: ByteValue) extends Value
-	case class CharValue(value: ByteValue) extends Value
+	case class ByteValue(value: ByteVector) extends Value
+	case class CharValue(value: ByteVector) extends Value
 	case class ObjectId(id: ByteVector) extends Value
-	case class FloatValue(value: ByteValue) extends Value
-	case class DoubleValue(value: ByteValue) extends Value
-	case class IntValue(value: ByteValue) extends Value
-	case class LongValue(value: ByteValue) extends Value
-	case class ShortValue(value: ByteValue) extends Value
+	case class FloatValue(value: ByteVector) extends Value
+	case class DoubleValue(value: ByteVector) extends Value
+	case class IntValue(value: ByteVector) extends Value
+	case class LongValue(value: ByteVector) extends Value
+	case class ShortValue(value: ByteVector) extends Value
 	case object VoidValue extends Value
-	case class BooleanValue(value: ByteValue) extends Value
+	case class BooleanValue(value: ByteVector) extends Value
 	case class StringId(objectId: ObjectId) extends Value
 	case class ThreadId(objectId: ObjectId) extends Value
 	case class ThreadGroupId(objectId: ObjectId) extends Value
 	case class ClassLoaderId(objectId: ObjectId) extends Value
 	case class ClassObjectId(objectId: ObjectId) extends Value
 
-	val byte: Codec[Byte] = codecs.bytes(1).xmap(_.get(0), { in => ByteVector(in) })
-	val boolean: Codec[Boolean] = codecs.bool(8)
-	val int: Codec[Int] = codecs.int(32)
-	val long: Codec[Long] = codecs.long(64)
-
-	def objectID(implicit idSizes: IdSizes): Codec[ObjectId] = codecs.bytes(idSizes.objectId).as[ObjectId]
+	def objectID(implicit idSizes: IdSizes): Codec[ObjectId] = codecs.bytes(idSizes.objectId).xmap(ObjectId, _.id)
+	def threadID(implicit idSizes: IdSizes): Codec[ThreadId] = objectID.xmap(ThreadId, _.objectId)
+	def threadGroupID(implicit idSizes: IdSizes): Codec[ThreadGroupId] = objectID.xmap(ThreadGroupId, _.objectId)
+	def stringID(implicit idSizes: IdSizes): Codec[StringId] = objectID.xmap(StringId, _.objectId)
+	def classLoaderID(implicit idSizes: IdSizes): Codec[ClassLoaderId] = objectID.xmap(ClassLoaderId, _.objectId)
+	def classObjectID(implicit idSizes: IdSizes): Codec[ClassObjectId] = objectID.xmap(ClassObjectId, _.objectId)
+	def arrayID(implicit idSizes: IdSizes): Codec[ArrayId] = objectID.xmap(ArrayId, _.objectId)
 
 	case class TaggedObjectId(objectType: Byte, objectId: ObjectId)
 	def taggedObjectID(implicit idSizes: IdSizes): Codec[TaggedObjectId] =
 		(byte :: objectID).as[TaggedObjectId]
 
-	def threadID(implicit idSizes: IdSizes): Codec[ThreadId] = objectID.as[ThreadId]
-
-	def threadGroupID(implicit idSizes: IdSizes): Codec[ThreadGroupId] = objectID.as[ThreadGroupId]
-
-	def stringID(implicit idSizes: IdSizes): Codec[StringId] = objectID.as[StringId]
-
-	def classLoaderID(implicit idSizes: IdSizes): Codec[ClassLoaderId] = objectID.as[ClassLoaderId]
-
-	def classObjectID(implicit idSizes: IdSizes): Codec[ClassObjectId] = objectID.as[ClassObjectId]
-
-	def arrayID(implicit idSizes: IdSizes): Codec[ArrayId] = objectID.as[ArrayId]
-
 	case class ReferenceTypeId(id: ByteVector)
 	def referenceTypeID(implicit idSizes: IdSizes): Codec[ReferenceTypeId] =
-		codecs.bytes(idSizes.referenceTypeId).as[ReferenceTypeId]
+		codecs.bytes(idSizes.referenceTypeId).xmap(ReferenceTypeId, _.id)
 
 	case class ClassId(referenceTypeId: ReferenceTypeId)
-	def classID(implicit idSizes: IdSizes): Codec[ClassId] = referenceTypeID.as[ClassId]
+	def classID(implicit idSizes: IdSizes): Codec[ClassId] = referenceTypeID.xmap(ClassId, _.referenceTypeId)
 
 	case class InterfaceId(referenceTypeId: ReferenceTypeId)
-	def interfaceID(implicit idSizes: IdSizes): Codec[InterfaceId] = referenceTypeID.as[InterfaceId]
+	def interfaceID(implicit idSizes: IdSizes): Codec[InterfaceId] = referenceTypeID.xmap(InterfaceId, _.referenceTypeId)
 
 	case class ArrayTypeId(referenceTypeId: ReferenceTypeId)
-	def arrayTypeID(implicit idSizes: IdSizes): Codec[ArrayTypeId] = referenceTypeID.as[ArrayTypeId]
+	def arrayTypeID(implicit idSizes: IdSizes): Codec[ArrayTypeId] = referenceTypeID.xmap(ArrayTypeId, _.referenceTypeId)
 
 	case class MethodId(id: ByteVector)
-	def methodID(implicit idSizes: IdSizes): Codec[MethodId] = codecs.bytes(idSizes.methodId).as[MethodId]
+	def methodID(implicit idSizes: IdSizes): Codec[MethodId] = codecs.bytes(idSizes.methodId).xmap(MethodId, _.id)
 
 	case class FieldId(id: ByteVector)
-	def fieldID(implicit idSizes: IdSizes): Codec[FieldId] = codecs.bytes(idSizes.fieldId).as[FieldId]
+	def fieldID(implicit idSizes: IdSizes): Codec[FieldId] = codecs.bytes(idSizes.fieldId).xmap(FieldId, _.id)
 
 	case class FrameId(id: ByteVector)
-	def frameID(implicit idSizes: IdSizes): Codec[FrameId] = codecs.bytes(idSizes.frameId).as[FrameId]
+	def frameID(implicit idSizes: IdSizes): Codec[FrameId] = codecs.bytes(idSizes.frameId).xmap(FrameId, _.id)
 
 	case class Location(typeTag: Byte, classId: ClassId, methodId: MethodId, index: ByteVector)
 	def location(implicit idSizes: IdSizes): Codec[Location] =
@@ -78,16 +72,16 @@ object PrimitiveCodecs {
 	def value(implicit idSizes: IdSizes): Codec[Value] =
 		codecs.discriminated[Value].by(byte)
 			.\ ('['.toByte) { case in :ArrayId => in } (arrayID)
-			.\ ('B'.toByte) { case in :ByteValue => in } (codecs.bytes(1).as[ByteValue])
-			.\ ('C'.toByte) { case in :CharValue => in } (codecs.bytes(2).as[CharValue])
+			.\ ('B'.toByte) { case in :ByteValue => in } (codecs.bytes(1).xmap(ByteValue, _.value))
+			.\ ('C'.toByte) { case in :CharValue => in } (codecs.bytes(2).xmap(CharValue, _.value))
 			.\ ('L'.toByte) { case in :ObjectId => in } (objectID)
-			.\ ('F'.toByte) { case in :FloatValue => in } (codecs.bytes(4).as[FloatValue])
-			.\ ('D'.toByte) { case in :DoubleValue => in } (codecs.bytes(4).as[DoubleValue])
-			.\ ('I'.toByte) { case in :IntValue => in } (codecs.bytes(4).as[IntValue])
-			.\ ('J'.toByte) { case in :LongValue => in } (codecs.bytes(8).as[LongValue])
-			.\ ('S'.toByte) { case in :ShortValue => in } (codecs.bytes(2).as[ShortValue])
+			.\ ('F'.toByte) { case in :FloatValue => in } (codecs.bytes(4).xmap(FloatValue, _.value))
+			.\ ('D'.toByte) { case in :DoubleValue => in } (codecs.bytes(4).xmap(DoubleValue, _.value))
+			.\ ('I'.toByte) { case in :IntValue => in } (codecs.bytes(4).xmap(IntValue, _.value))
+			.\ ('J'.toByte) { case in :LongValue => in } (codecs.bytes(8).xmap(LongValue, _.value))
+			.\ ('S'.toByte) { case in :ShortValue => in } (codecs.bytes(2).xmap(ShortValue, _.value))
 			.\ ('V'.toByte) { case in @ VoidValue => in } (codecs.provide(VoidValue))
-			.\ ('Z'.toByte) { case in :BooleanValue => in } (codecs.bytes(1).as[BooleanValue])
+			.\ ('Z'.toByte) { case in :BooleanValue => in } (codecs.bytes(1).xmap(BooleanValue, _.value))
 			.\ ('s'.toByte) { case in :StringId => in } (stringID)
 			.\ ('t'.toByte) { case in :ThreadId => in } (threadID)
 			.\ ('g'.toByte) { case in :ThreadGroupId => in } (threadGroupID)

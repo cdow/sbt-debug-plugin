@@ -27,7 +27,7 @@ class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Op
 	startWith(Initial, None)
 
 	when(Initial) {
-		case Event(b @ Bound(localAddress)) =>
+		case Event(Bound(localAddress)) =>
 			goto(Bound)
 		case Event(CommandFailed(_: Bind)) =>
 			context stop self
@@ -35,19 +35,19 @@ class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Op
 	}
 
 	when(Bound) {
-		case Event(c @ Connected(remote, local)) =>
-			listener ! c
+		case Event(Connected(remote, local)) =>
+			listener ! "debugger-connected"
 			val connection = sender()
 			connection ! Register(self)
 			goto(Connected) using Some(connection)
 	}
 
 	when(Connected) {
-		case Event(Received(data), connection: Option[ActorRef]) if data == HANDSHAKE =>
-			connection.foreach(_ ! Write(HANDSHAKE))
+		case Event(Received(HANDSHAKE), Some(connection)) =>
+			connection ! Write(HANDSHAKE)
 			goto(Running)
 		case Event(connectionClosed: ConnectionClosed) =>
-			listener ! connectionClosed
+			listener ! "debugger-disconnected"
 			goto(Bound) using None
 	}
 
@@ -59,7 +59,7 @@ class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Op
 			listener ! data
 			stay
 		case Event(connectionClosed: ConnectionClosed) =>
-			listener ! connectionClosed
+			listener ! "debugger-disconnected"
 			goto(Bound) using None
 	}
 

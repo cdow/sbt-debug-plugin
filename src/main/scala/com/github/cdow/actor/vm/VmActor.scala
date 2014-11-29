@@ -2,7 +2,7 @@ package com.github.cdow.actor.vm
 
 import java.net.InetSocketAddress
 
-import akka.actor.{Actor, ActorRef, Props}
+import akka.actor.{FSM, Actor, ActorRef, Props}
 import akka.io.{IO, Tcp}
 import akka.io.Tcp._
 import akka.util.ByteString
@@ -17,30 +17,59 @@ object VmActor {
 	def props(port: Int, listener: ActorRef) = Props(new VmActor(port, listener))
 }
 
-class VmActor(port: Int, listener: ActorRef) extends Actor {
+class VmActor(port: Int, listener: ActorRef) extends FSM[VmState, Option[ActorRef]] {
+	val HANDSHAKE = ByteString.fromString("JDWP-Handshake", "US-ASCII")
 
-	connect
+	startWith(Initial, None)
 
-	def receive: Actor.Receive = {
-		case CommandFailed(_: Connect) =>
+	when(Initial) {
+		case Event("debugger-connected") =>
 			connect
+			goto(DebuggerConnected)
+	}
 
-		case c @ Connected(remote, local) =>
-			listener ! c
+	when(DebuggerConnected) {
+		case Event(CommandFailed(_: Connect)) =>
+			connect
+			stay()
+		case Event(Connected(remote, local))	 =>
+			listener ! "vm-connected"
 			val connection = sender()
 			connection ! Register(self)
-			context become {
-				case data: ByteString =>
-					connection ! Write(data)
-				case Received(data) =>
-					listener ! data
-				case "close" =>
-					connection ! Close
-				case _: ConnectionClosed =>
-					context unbecome()
-					connect
-			}
+			connection ! Write(HANDSHAKE)
+			goto(Connected) using Some(connection)
+		case Event("debugger-disconnected", Some(connection)) =>
+			connection ! Close
+			goto(Initial) using None
 	}
+
+	when(Connected) {
+		case Event(Received(HANDSHAKE), Some(connection)) =>
+			goto(Running)
+		case Event(connectionClosed: ConnectionClosed) =>
+			listener ! "vm-disconnected"
+			goto(DebuggerConnected) using None
+		case Event("debugger-disconnected", Some(connection)) =>
+			connection ! Close
+			goto(Initial) using None
+	}
+
+	when(Running) {
+		case Event(data: ByteString, Some(connection)) =>
+			connection ! Write(data)
+			stay
+		case Event(Received(data)) =>
+			listener ! data
+			stay
+		case Event(connectionClosed: ConnectionClosed) =>
+			listener ! "vm-disconnected"
+			goto(DebuggerConnected) using None
+		case Event("debugger-disconnected", Some(connection)) =>
+			connection ! Close
+			goto(Initial) using None
+	}
+
+	initialize()
 
 	private def connect: Unit =
 		IO(Tcp) ! Connect(new InetSocketAddress(port))

@@ -6,6 +6,7 @@ import akka.actor.{FSM, Props, ActorRef}
 import akka.io.Tcp._
 import akka.io.{Tcp, IO}
 import akka.util.ByteString
+import com.github.cdow.actor.MainMessages
 
 sealed trait DebuggerState
 case object Initial extends DebuggerState
@@ -27,16 +28,16 @@ class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Op
 	startWith(Initial, None)
 
 	when(Initial) {
-		case Event(Bound(localAddress)) =>
+		case Event(Tcp.Bound(localAddress), None) =>
 			goto(Bound)
-		case Event(CommandFailed(_: Bind)) =>
+		case Event(CommandFailed(_: Bind), None) =>
 			context stop self
 			stay
 	}
 
 	when(Bound) {
-		case Event(Connected(remote, local)) =>
-			listener ! "debugger-connected"
+		case Event(Tcp.Connected(remote, local), None) =>
+			listener ! MainMessages.DebuggerConnected
 			val connection = sender()
 			connection ! Register(self)
 			goto(Connected) using Some(connection)
@@ -46,8 +47,8 @@ class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Op
 		case Event(Received(HANDSHAKE), Some(connection)) =>
 			connection ! Write(HANDSHAKE)
 			goto(Running)
-		case Event(connectionClosed: ConnectionClosed) =>
-			listener ! "debugger-disconnected"
+		case Event(_ :ConnectionClosed, Some(_)) =>
+			listener ! MainMessages.DebuggerDisconnected
 			goto(Bound) using None
 	}
 
@@ -55,11 +56,11 @@ class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Op
 		case Event(data: ByteString, Some(connection)) =>
 			connection ! Write(data)
 			stay
-		case Event(Received(data)) =>
+		case Event(Received(data), Some(_)) =>
 			listener ! data
 			stay
-		case Event(connectionClosed: ConnectionClosed) =>
-			listener ! "debugger-disconnected"
+		case Event(_: ConnectionClosed, Some(_)) =>
+			listener ! MainMessages.DebuggerDisconnected
 			goto(Bound) using None
 	}
 

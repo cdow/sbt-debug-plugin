@@ -1,33 +1,31 @@
 package com.github.cdow
 
+import com.github.cdow.commands.Event
+import com.typesafe.config.ConfigFactory
 import sbt._
 import sbt.Keys._
 import java.net.Socket
-import java.net.ServerSocket
-import java.nio.ByteBuffer
-import scala.util.Try
-import java.io.InputStream
-import java.io.BufferedInputStream
-import java.util.Arrays
 import ByteUtils._
 import com.github.cdow.responses._
 import com.github.cdow.commands._
 import scodec.bits.ByteVector
+import akka.actor.ActorSystem
+import com.github.cdow.actor.MainActor
 
 object DebugPlugin extends Plugin {
 	val debugStart = taskKey[Unit]("starts debugger proxy")
 	val debugStop = taskKey[Unit]("stops debugger proxy")
 	val debugPort = settingKey[Int]("port to attache your debugger to")
-	val debugVmPorts = settingKey[Set[Int]]("VM debug ports to connect to")
+	val debugVmPort = settingKey[Int]("VM debug port to connect to")
 
 	private val debugProxyAttribute = AttributeKey[DebugProxy]("debugProxy")
 
 	val debugSettings = Seq(
 		debugPort := 6006,
-		debugVmPorts := Set(6007),
+		debugVmPort := 6007,
 		onLoad in Global := {
 			(onLoad in Global).value.andThen { state =>
-				val proxy = new DebugProxy(debugPort.value, debugVmPorts.value)
+				val proxy = new DebugProxy(debugPort.value, debugVmPort.value)
 				state.put(debugProxyAttribute, proxy)
 			}
 		},
@@ -52,230 +50,38 @@ object DebugPlugin extends Plugin {
 
 	case class BreakPoint(requestId: Integer, originalMessage: JdwpPacket)
 
-	class DebugProxy(port: Int, val vmPorts: Set[Int]) {
-		val HANDSHAKE = "JDWP-Handshake".toCharArray.map(_.toByte)
+	class DebugProxy(debuggerPort: Int, val vmPort: Int) {
 		val ID_SIZE_REQUEST = Array[Byte](0, 0, 0, 11, 127, 127, 127, 127, 0, 1, 7)
 		val ID_SIZE_REQUEST_ID = Array[Byte](127, 127, 127, 127) // TODO think about unlikely request id
-		private var server: ServerSocket = null
-		private var thread: DebugThread = null
-		private var connectedVms = Map[Int, Socket]()
-		private var runThread = true
+		var actorSystem: Option[ActorSystem] = None
 
 		private var replayMessages = Vector[BreakPoint]()
 		private var nextRequestId = 0
 
 		def stop(): Unit = {
-			runThread = false
-			server.close
-			connectedVms.values.foreach(_.close)
-			connectedVms = Map[Int, Socket]()
-			replayMessages = Vector[BreakPoint]()
+			actorSystem.foreach(_.shutdown)
+			actorSystem = None
 		}
 
 		def start(): Unit = {
-			runThread = true
-			server = new ServerSocket(port)
-			thread = new DebugThread()
-
-			thread.start
-		}
-
-		private def getNewVmSockets(): Map[Int, Socket] = {
-			val unConnectedVmPorts = vmPorts -- connectedVms.keys
-			val connectionAttempts = unConnectedVmPorts.map { port =>
-				val attempt = Try(new Socket(null: String, port))
-
-				(port, attempt)
-			}.toMap
-
-			val successfulConnections = connectionAttempts.filter {
-				case (port, attempt) =>
-					attempt.isSuccess
-			}
-
-			val newSocketMap = successfulConnections.mapValues(_.get)
-
-			newSocketMap.values.foreach { socket =>
-				socket.getOutputStream.write(HANDSHAKE)
-				socket.getInputStream.skip(HANDSHAKE.length)
-			}
-
-			newSocketMap
-		}
-
-		private def getIdSizes(vmSocket: Socket): IdSizes = {
-			vmSocket.getOutputStream.write(ID_SIZE_REQUEST)
-			var response: JdwpPacket = null
-			while (response == null) {
-				val responseMessage = readMessage(vmSocket.getInputStream)
-				if (responseMessage != null && bytesToInt(ID_SIZE_REQUEST_ID) == responseMessage.id) {
-					response = responseMessage
-				}
-			}
-
-			// TODO error handling better
-			response match {
-				case JdwpPacket(id, ResponsePacket(errors, data)) => JdwpCodecs.parseIdSizeResponse(data)
-				case _ => throw new Exception("this is not an id size reponse")
+			actorSystem = actorSystem.orElse {
+				val config = ConfigFactory.parseString("")
+				// Default config does not load unless we specify a custom classloader
+				val system = ActorSystem("main", config, getClass.getClassLoader)
+				system.actorOf(MainActor.props(debuggerPort, vmPort))
+				Some(system)
 			}
 		}
 
-		private def readMessage(inputStream: InputStream): JdwpPacket = {
-			if (inputStream.available > 4) {
-				val lengthBytes = Array.ofDim[Byte](4)
-				inputStream.read(lengthBytes)
+		private def getIdSizes(vmSocket: Socket): IdSizes = { }
 
-				val messageLength = bytesToInt(lengthBytes)
-
-				val bodyBytes = Array.ofDim[Byte](messageLength - 4)
-				inputStream.read(bodyBytes)
-
-				JdwpCodecs.decodePacket(lengthBytes ++ bodyBytes)
-			} else {
-				// TODO stop using null
-				null
-			}
-		}
-
-		private def handleBreakPointMessage(packet: JdwpPacket): Unit = {
-			if (packet != null) {
-				packet.message match {
-					case cp: CommandPacket =>
-						cp.command match {
-							// set
-							case EventRequest.Set(_) =>
-								val requestId = nextRequestId
-								nextRequestId += 1
-								replayMessages = replayMessages :+ BreakPoint(requestId, packet)
-							// clear
-							case EventRequest.Clear(_) =>
-								// TODO make clear work properly
-								val requestId = nextRequestId
-								nextRequestId += 1
-								replayMessages = replayMessages :+ BreakPoint(requestId, packet)
-							// clear all
-							case EventRequest.ClearAllBreakpoints(_) => replayMessages = Vector[BreakPoint]()
-							case _ => // do nothing
-						}
-					case rp: ResponsePacket => // do nothing
-				}
-			}
-		}
-
-		private def peak(inStream: InputStream): Byte = {
-			inStream.mark(1)
-			val firstByte = inStream.read.asInstanceOf[Byte]
-			inStream.reset
-
-			firstByte
-		}
-
-		private class DebugThread extends Thread {
-			override def run(): Unit = {
-				while (runThread) {
-					val debuggerSocket = server.accept
-
-					val debuggerInput = debuggerSocket.getInputStream
-					val debuggerOutput = debuggerSocket.getOutputStream
-					while (debuggerInput.available < HANDSHAKE.length) {
-						Thread.sleep(100)
-					}
-					debuggerInput.skip(HANDSHAKE.length)
-					debuggerOutput.write(HANDSHAKE)
-
-					val debuggerReadThread = new DebuggerReadThread(debuggerSocket)
-					debuggerReadThread.start
-
-					while (!debuggerSocket.isClosed) {
-						// invalidate closed VM connections
-						connectedVms = connectedVms.filter {
-							case (port, socket) =>
-								!socket.isClosed
-						}
-
-						// look for new VM connections
-						val newConnectedVms = getNewVmSockets
-						newConnectedVms.values.foreach { vmSocket =>
-							val idSizes = getIdSizes(vmSocket)
-
-							replayMessages.foreach { breakPoint =>
-println("BREAKPOINT: " + breakPoint)
-								vmSocket.getOutputStream.write(JdwpCodecs.encodePacket(breakPoint.originalMessage))
-							}
-
-							val vmReadThread = new VmReadThread(debuggerSocket, vmSocket, idSizes)
-							vmReadThread.start
-						}
-						connectedVms = connectedVms ++ newConnectedVms
-
-						Thread.sleep(100)
-					}
-
-					debuggerSocket.close
-
-					replayMessages = Vector[BreakPoint]()
-
-					connectedVms.foreach {
-						case (port, socket) =>
-							socket.close
-					}
-					connectedVms = Map[Int, Socket]()
-				}
-			}
-		}
-
-		private class DebuggerReadThread(debuggerSocket: Socket) extends Thread {
-			override def run: Unit = {
-				val inputStream = new BufferedInputStream(debuggerSocket.getInputStream)
-
-				while (!debuggerSocket.isClosed) {
-					val firstByte = peak(inputStream)
-					if (firstByte == -1) {
-						debuggerSocket.close
-					} else {
-						// send messages from debugger to VMs
-						if (connectedVms.size > 0) {
-							val debuggerMessage = readMessage(inputStream)
-if (debuggerMessage != null) println("DEBUGGER: " + debuggerMessage)
-							connectedVms.values.foreach { vmSocket =>
-								val vmOutputStream = vmSocket.getOutputStream
-								vmOutputStream.write(JdwpCodecs.encodePacket(debuggerMessage))
-							}
-
-							// save breakpoint messages
-							handleBreakPointMessage(debuggerMessage)
-						}
-					}
-				}
-			}
-		}
+		private def handleBreakPointMessage(packet: JdwpPacket): Unit = { }
 
 		private class VmReadThread(debuggerSocket: Socket, vmSocket: Socket, idSizes: IdSizes) extends Thread {
-			private val ID_SIZE_REQUEST = Array[Byte](0, 0, 0, 11, 0, 0, 0, 1, 0, 1, 7)
-
 			// map from original requestId to our fake requestId
 			private var requestIdMap = Map.empty[Int, Int]
 
-			override def run: Unit = {
-				val inputStream = new BufferedInputStream(vmSocket.getInputStream)
-				while (!vmSocket.isClosed) {
-					val firstByte = peak(inputStream)
-					if (firstByte == -1) {
-						vmSocket.close
-					} else {
-						// send messages from VMs to debugger
-						val debuggerOutputStream = debuggerSocket.getOutputStream
-						val vmMessage = readMessage(inputStream)
-if (vmMessage != null) println("ORIGINAL VM: " + vmMessage)
-						val vmMessageReplacedId = replaceRequestId(vmMessage)
-//						val vmMessageReplacedId = vmMessage
-						if(!isVmDeathEvent(vmMessageReplacedId)) {
-if (vmMessage != null) println("VM: " + vmMessageReplacedId)
-							debuggerOutputStream.write(JdwpCodecs.encodePacket(vmMessageReplacedId))
-						}
-					}
-				}
-			}
+			override def run: Unit = { }
 
 			//TODO parse this properly
 			private def isVmDeathEvent(message: JdwpPacket): Boolean = {

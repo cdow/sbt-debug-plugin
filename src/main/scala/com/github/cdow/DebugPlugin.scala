@@ -83,15 +83,6 @@ object DebugPlugin extends Plugin {
 
 			override def run: Unit = { }
 
-			//TODO parse this properly
-			private def isVmDeathEvent(message: JdwpPacket): Boolean = {
-				message.message match {
-					case CommandPacket(Event.Composite(data)) =>
-						data.length == 10 && data(5) == (99: Byte)
-					case _ => false
-				}
-			}
-
 			private def replaceRequestId(packet: JdwpPacket): JdwpPacket = {
 				packet.copy(message = packet.message match {
 					case rp: ResponsePacket =>

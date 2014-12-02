@@ -2,7 +2,8 @@ package com.github.cdow.actor
 
 import akka.actor.{FSM, Actor, Props}
 import akka.util.ByteString
-import com.github.cdow.JdwpCodecs
+import com.github.cdow.commands
+import com.github.cdow.{JdwpPacket, CommandPacket, JdwpCodecs}
 import com.github.cdow.actor.debugger.DebuggerActor
 import com.github.cdow.actor.vm.{VmMessage, VmActor}
 
@@ -63,7 +64,10 @@ println("DEBUGGER: " + decoded)
 			} else {
 				val decoded = JdwpCodecs.decodePacket(data.toArray)
 println("VM:       " + decoded)
-				debuggerActor ! data
+
+				if(!isVmDeathEvent(decoded)) {
+					debuggerActor ! data
+				}
 			}
 			stay
 		case Event(MainMessage.VmDisconnected, ()) =>
@@ -71,5 +75,14 @@ println("VM:       " + decoded)
 		case Event(MainMessage.DebuggerDisconnected, ()) =>
 			vmActor ! VmMessage.Disconnect
 			goto(Idle)
+	}
+
+	//TODO parse this properly
+	private def isVmDeathEvent(message: JdwpPacket): Boolean = {
+		message.message match {
+			case CommandPacket(commands.Event.Composite(data)) =>
+				data.length == 10 && data(5) == (99: Byte)
+			case _ => false
+		}
 	}
 }

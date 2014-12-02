@@ -4,21 +4,21 @@ import akka.actor.{FSM, Actor, Props}
 import akka.util.ByteString
 import com.github.cdow.JdwpCodecs
 import com.github.cdow.actor.debugger.DebuggerActor
-import com.github.cdow.actor.vm.VmActor
+import com.github.cdow.actor.vm.{VmMessage, VmActor}
 
 trait MainState
 object MainState {
-	case object Initial extends MainState
+	case object Idle extends MainState
 	case object DebuggerConnected extends MainState
 	case object VmConnected extends MainState
 }
 
-trait MainMessages
-object MainMessages {
-	case object DebuggerConnected extends MainMessages
-	case object DebuggerDisconnected extends MainMessages
-	case object VmConnected extends MainMessages
-	case object VmDisconnected extends MainMessages
+trait MainMessage
+object MainMessage {
+	case object DebuggerConnected extends MainMessage
+	case object DebuggerDisconnected extends MainMessage
+	case object VmConnected extends MainMessage
+	case object VmDisconnected extends MainMessage
 }
 
 object MainActor {
@@ -26,33 +26,35 @@ object MainActor {
 }
 
 class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
+	import MainState._
+	
 	val debuggerActor = context.actorOf(DebuggerActor.props(debuggerPort, self), "debugger")
 	val vmActor = context.actorOf(VmActor.props(vmPort, self), "vm")
 
 	var queuedMessages = Seq.empty[ByteString]
 
-	startWith(MainState.Initial, ())
+	startWith(Idle, ())
 
-	when(MainState.Initial) {
-		case Event(MainMessages.DebuggerConnected, ()) =>
-			vmActor ! MainMessages.DebuggerConnected
-			goto(MainState.DebuggerConnected)
+	when(Idle) {
+		case Event(MainMessage.DebuggerConnected, ()) =>
+			vmActor ! VmMessage.Connect
+			goto(DebuggerConnected)
 	}
 
-	when(MainState.DebuggerConnected) {
+	when(DebuggerConnected) {
 		case Event(data: ByteString, ()) =>
 			queuedMessages = queuedMessages :+ data
 			stay
-		case Event(MainMessages.VmConnected, ()) =>
+		case Event(MainMessage.VmConnected, ()) =>
 			queuedMessages.foreach(vmActor ! _)
 			queuedMessages = Seq.empty
-			goto(MainState.VmConnected)
-		case Event(MainMessages.DebuggerDisconnected, ()) =>
-			vmActor ! MainMessages.DebuggerDisconnected
-			goto(MainState.Initial)
+			goto(VmConnected)
+		case Event(MainMessage.DebuggerDisconnected, ()) =>
+			vmActor ! VmMessage.Disconnect
+			goto(Idle)
 	}
 
-	when(MainState.VmConnected) {
+	when(VmConnected) {
 		case Event(data: ByteString, ()) =>
 			if(debuggerActor == sender()) {
 				val decoded = JdwpCodecs.decodePacket(data.toArray)
@@ -64,10 +66,10 @@ println("VM:       " + decoded)
 				debuggerActor ! data
 			}
 			stay
-		case Event(MainMessages.VmDisconnected, ()) =>
-			goto(MainState.DebuggerConnected)
-		case Event(MainMessages.DebuggerDisconnected, ()) =>
-			vmActor ! MainMessages.DebuggerDisconnected
-			goto(MainState.Initial)
+		case Event(MainMessage.VmDisconnected, ()) =>
+			goto(DebuggerConnected)
+		case Event(MainMessage.DebuggerDisconnected, ()) =>
+			vmActor ! VmMessage.Disconnect
+			goto(Idle)
 	}
 }

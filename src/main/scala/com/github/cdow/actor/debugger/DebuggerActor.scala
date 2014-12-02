@@ -6,13 +6,14 @@ import akka.actor.{FSM, Props, ActorRef}
 import akka.io.Tcp._
 import akka.io.{Tcp, IO}
 import akka.util.ByteString
-import com.github.cdow.actor.MainMessages
 
 sealed trait DebuggerState
-case object Initial extends DebuggerState
-case object Bound extends DebuggerState
-case object Connected extends DebuggerState
-case object Running extends DebuggerState
+object DebuggerState {
+	case object Idle extends DebuggerState
+	case object Bound extends DebuggerState
+	case object Connected extends DebuggerState
+	case object Running extends DebuggerState
+}
 
 object DebuggerActor {
 	def props(port: Int, listener: ActorRef) = Props(new DebuggerActor(port, listener))
@@ -20,14 +21,15 @@ object DebuggerActor {
 
 class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Option[ActorRef]] {
 	import context.system
+	import DebuggerState._
 
 	val HANDSHAKE = ByteString.fromString("JDWP-Handshake", "US-ASCII")
 
 	IO(Tcp) ! Bind(self, new InetSocketAddress(port))
 
-	startWith(Initial, None)
+	startWith(Idle, None)
 
-	when(Initial) {
+	when(Idle) {
 		case Event(Tcp.Bound(localAddress), None) =>
 			goto(Bound)
 		case Event(CommandFailed(_: Bind), None) =>
@@ -37,7 +39,7 @@ class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Op
 
 	when(Bound) {
 		case Event(Tcp.Connected(remote, local), None) =>
-			listener ! MainMessages.DebuggerConnected
+			listener ! MainMessage.DebuggerConnected
 			val connection = sender()
 			connection ! Register(self)
 			goto(Connected) using Some(connection)
@@ -48,7 +50,7 @@ class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Op
 			connection ! Write(HANDSHAKE)
 			goto(Running)
 		case Event(_ :ConnectionClosed, Some(_)) =>
-			listener ! MainMessages.DebuggerDisconnected
+			listener ! MainMessage.DebuggerDisconnected
 			goto(Bound) using None
 	}
 
@@ -60,7 +62,7 @@ class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Op
 			listener ! data
 			stay
 		case Event(_: ConnectionClosed, Some(_)) =>
-			listener ! MainMessages.DebuggerDisconnected
+			listener ! MainMessage.DebuggerDisconnected
 			goto(Bound) using None
 	}
 

@@ -2,8 +2,7 @@ package com.github.cdow.actor
 
 import akka.actor.{FSM, Actor, Props}
 import akka.util.ByteString
-import com.github.cdow.commands
-import com.github.cdow.{JdwpPacket, CommandPacket, JdwpCodecs}
+import com.github.cdow._
 import com.github.cdow.actor.debugger.DebuggerActor
 import com.github.cdow.actor.vm.{VmMessage, VmActor}
 
@@ -33,6 +32,7 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 	val vmActor = context.actorOf(VmActor.props(vmPort, self), "vm")
 
 	var queuedMessages = Seq.empty[ByteString]
+	var awaitingReponse = Map.empty[Long, CommandPacket]
 
 	startWith(Idle, ())
 
@@ -57,13 +57,21 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 
 	when(VmConnected) {
 		case Event(data: ByteString, ()) =>
+			val decoded = JdwpCodecs.decodePacket(data.toArray)
+			decoded match {
+				case JdwpPacket(id, cp :CommandPacket)=>
+					awaitingReponse = awaitingReponse + (id -> cp)
+				case JdwpPacket(id, rp: ResponsePacket)=>
+					val cp = awaitingReponse(id)
+					awaitingReponse = awaitingReponse - id
+			}
+
 			if(debuggerActor == sender()) {
-				val decoded = JdwpCodecs.decodePacket(data.toArray)
 println("DEBUGGER: " + decoded)
 				vmActor ! data
 			} else {
-				val decoded = JdwpCodecs.decodePacket(data.toArray)
-println("VM:       " + decoded)
+
+				println("VM:       " + decoded)
 
 				if(!isVmDeathEvent(decoded)) {
 					debuggerActor ! data

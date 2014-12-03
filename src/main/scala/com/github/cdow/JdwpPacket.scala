@@ -1,5 +1,4 @@
 package com.github.cdow
-import ByteUtils._
 import scodec.bits.ByteVector
 import com.github.cdow.commands.Command
 

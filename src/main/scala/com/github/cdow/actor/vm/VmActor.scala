@@ -6,6 +6,7 @@ import akka.actor.{FSM, ActorRef, Props}
 import akka.io.{IO, Tcp}
 import akka.io.Tcp._
 import akka.util.ByteString
+import com.github.cdow.actor.MainMessage
 
 sealed trait VmMessage
 object VmMessage {

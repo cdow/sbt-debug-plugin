@@ -6,6 +6,7 @@ import akka.actor.{FSM, Props, ActorRef}
 import akka.io.Tcp._
 import akka.io.{Tcp, IO}
 import akka.util.ByteString
+import com.github.cdow.actor.MainMessage
 
 sealed trait DebuggerState
 object DebuggerState {

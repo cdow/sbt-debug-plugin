@@ -35,7 +35,7 @@ class VmActor(port: Int, listener: ActorRef) extends FSM[VmState, Option[ActorRe
 	startWith(Idle, None)
 
 	when(Idle) {
-		case Event(MainMessage.DebuggerConnected, None) =>
+		case Event(VmMessage.Connect, None) =>
 			connect
 			goto(Connecting)
 	}
@@ -49,7 +49,7 @@ class VmActor(port: Int, listener: ActorRef) extends FSM[VmState, Option[ActorRe
 			connection ! Register(self)
 			connection ! Write(HANDSHAKE)
 			goto(Connected) using Some(connection)
-		case Event(MainMessage.DebuggerDisconnected, Some(connection)) =>
+		case Event(VmMessage.Disconnect, Some(connection)) =>
 			connection ! Close
 			goto(Idle) using None
 	}
@@ -61,7 +61,7 @@ class VmActor(port: Int, listener: ActorRef) extends FSM[VmState, Option[ActorRe
 		case Event(_: ConnectionClosed, Some(_)) =>
 			listener ! MainMessage.VmDisconnected
 			goto(Connecting) using None
-		case Event(MainMessage.DebuggerDisconnected, Some(connection)) =>
+		case Event(VmMessage.Disconnect, Some(connection)) =>
 			connection ! Close
 			goto(Idle) using None
 	}
@@ -76,7 +76,7 @@ class VmActor(port: Int, listener: ActorRef) extends FSM[VmState, Option[ActorRe
 		case Event(_: ConnectionClosed, Some(_)) =>
 			listener ! MainMessage.VmDisconnected
 			goto(Connecting) using None
-		case Event(MainMessage.DebuggerDisconnected, Some(connection)) =>
+		case Event(VmMessage.Disconnect, Some(connection)) =>
 			connection ! Close
 			goto(Idle) using None
 	}

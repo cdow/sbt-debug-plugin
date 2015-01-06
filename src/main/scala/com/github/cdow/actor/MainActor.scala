@@ -2,6 +2,7 @@ package com.github.cdow.actor
 
 import akka.actor.{FSM, Actor, Props}
 import akka.util.ByteString
+import com.github.cdow.PrimitiveCodecs.RequestId
 import com.github.cdow._
 import com.github.cdow.actor.debugger.DebuggerActor
 import com.github.cdow.actor.vm.{VmMessage, VmActor}
@@ -100,7 +101,7 @@ println("VM:       " + decoded)
 	private def isVmDeathEvent(message: JdwpPacket): Boolean = {
 		message.message match {
 			case CommandPacket(commands.Event.Composite(_, events)) =>
-				events.contains(VMDeath(0))
+				events.contains(VMDeath(RequestId(0)))
 			case _ => false
 		}
 	}

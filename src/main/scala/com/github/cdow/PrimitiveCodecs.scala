@@ -69,7 +69,7 @@ object PrimitiveCodecs {
 	def location(implicit idSizes: IdSizes): Codec[Location] =
 		(byte :: classID :: methodID :: codecs.bytes(8)).as[Location]
 
-	val string = codecs.variableSizeBytes(int, codecs.utf8)
+	val string: Codec[String] = codecs.variableSizeBytes(int, codecs.utf8)
 
 	def value(implicit idSizes: IdSizes): Codec[Value] =
 		codecs.discriminated[Value].by(byte)
@@ -94,10 +94,8 @@ object PrimitiveCodecs {
 	//    untagged-value 	Variable 	A value as described above without the signature byte. This form is used when the signature information can be determined from context.
 	//    arrayregion 	Variable 	A compact representation of values used with some array operations. The first byte is a signature byte which is used to identify the type. See JDWP.Tag for the possible values of this byte. Next is a four-byte integer indicating the number of values in the sequence. This is followed by the values themselves: Primitive values are encoded as a sequence of untagged-values; Object values are encoded as a sequence of values.
 
-	val seqEmptyCodec: Codec[Seq[_]] = new Codec[Seq[_]] {
-		def encode(hn: Seq[_]) = \/-(BitVector.empty)
-		def decode(buffer: BitVector) = \/-((buffer, Seq.empty))
-	}
+	case class RequestId(id: Int)
+	val requestId: Codec[RequestId] = int.hlist.as[RequestId]
 
 	def times[A](times: Codec[Int], values: Codec[A]): Codec[Seq[A]] = new Codec[Seq[A]] {
 		def encode(a: Seq[A]) = {

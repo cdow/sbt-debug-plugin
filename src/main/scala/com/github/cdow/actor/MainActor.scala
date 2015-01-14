@@ -54,10 +54,7 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 			stay
 		case Event(MainMessage.VmConnected, ()) =>
 			queuedMessages.foreach { queuedMessage =>
-				val decoded = JdwpCodecs.decodePacket(queuedMessage.toArray)
-				awaitingReponse = updateAwaitingResponse(awaitingReponse, decoded)
-
-				vmActor ! queuedMessage
+				self ! queuedMessage
 			}
 			queuedMessages = Seq.empty
 			goto(VmConnected)
@@ -69,9 +66,15 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 	when(VmConnected) {
 		case Event(data: ByteString, ()) =>
 			val decoded = JdwpCodecs.decodePacket(data.toArray)
-			awaitingReponse = updateAwaitingResponse(awaitingReponse, decoded)
+			awaitingReponse = decoded match {
+				case JdwpPacket(id, cp :CommandPacket)=>
+					awaitingReponse + (id -> cp)
+				case JdwpPacket(id, rp: ResponsePacket)=>
+					val cp = awaitingReponse(id)
+					awaitingReponse - id
+			}
 
-			if(debuggerActor == sender()) {
+			if(self == sender() || debuggerActor == sender()) {
 println("DEBUGGER: " + decoded)
 				vmActor ! data
 			} else {
@@ -86,16 +89,6 @@ println("VM:       " + decoded)
 		case Event(MainMessage.DebuggerDisconnected, ()) =>
 			vmActor ! VmMessage.Disconnect
 			goto(Idle)
-	}
-
-	private def updateAwaitingResponse(oldAwaitingResponse: Map[Long, CommandPacket], newMessage: JdwpPacket): Map[Long, CommandPacket] = {
-		newMessage match {
-			case JdwpPacket(id, cp :CommandPacket)=>
-				oldAwaitingResponse + (id -> cp)
-			case JdwpPacket(id, rp: ResponsePacket)=>
-				val cp = awaitingReponse(id)
-				oldAwaitingResponse - id
-		}
 	}
 
 	private def isVmDeathEvent(message: JdwpPacket): Boolean = {

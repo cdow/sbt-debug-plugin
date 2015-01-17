@@ -143,9 +143,9 @@ case object ClassLoaderReference extends CommandSet {
 
 sealed trait EventRequestCommand extends Command
 case object EventRequest extends CommandSet {
-	case class Set(data: ByteVector) extends EventRequestCommand
+	case class Set(eventKind: Byte, suspendPolicy: Byte, modifiers: Seq[EventRequestModifiers]) extends EventRequestCommand
 	case class Clear(eventKind: Byte, requestId: Int) extends EventRequestCommand
-	case class ClearAllBreakpoints(data: ByteVector) extends EventRequestCommand
+	case object ClearAllBreakpoints extends EventRequestCommand
 }
 
 sealed trait StackFrameCommand extends Command
@@ -273,9 +273,9 @@ object CommandCodecs {
 			.\ (1) {case in: ClassLoaderReference.VisibleClasses => in} (codecs.bytes.hlist.as[ClassLoaderReference.VisibleClasses])
 		}
 		.\ (15) {case in: EventRequestCommand => in} { codecs.discriminated[EventRequestCommand].by(codecs.uint8)
-			.\ (1) {case in: EventRequest.Set => in} (codecs.bytes.hlist.as[EventRequest.Set])
+			.\ (1) {case in: EventRequest.Set => in} ((byte :: byte :: CommandBody.eventRequestModifiers).as[EventRequest.Set])
 			.\ (2) {case in: EventRequest.Clear => in} ((byte :: int).as[EventRequest.Clear])
-			.\ (3) {case in: EventRequest.ClearAllBreakpoints => in} (codecs.bytes.hlist.as[EventRequest.ClearAllBreakpoints])
+			.\ (3) {case in @ EventRequest.ClearAllBreakpoints => in} (codecs.provide(EventRequest.ClearAllBreakpoints))
 		}
 		.\ (16) {case in: StackFrameCommand => in} { codecs.discriminated[StackFrameCommand].by(codecs.uint8)
 			.\ (1) {case in: StackFrame.GetValues => in} (codecs.bytes.hlist.as[StackFrame.GetValues])

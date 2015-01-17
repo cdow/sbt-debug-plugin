@@ -27,6 +27,23 @@ object CommandBody {
 				.\ (90) { case in: VMStart => in } ((requestId :: threadID).as[VMStart])
 				.\ (99) { case in: VMDeath => in } ((requestId.hlist).as[VMDeath])
 		)
+
+	def eventRequestModifiers(implicit idSizes: IdSizes): Codec[Seq[EventRequestModifiers]] =
+		times(int,
+			codecs.discriminated[EventRequestModifiers].by(byte)
+				.\ (1) { case in: Count => in } (int.hlist.as[Count])
+				.\ (2) { case in: Conditional => in } (int.hlist.as[Conditional])
+				.\ (3) { case in: ThreadOnly => in } (threadID.hlist.as[ThreadOnly])
+				.\ (4) { case in: ClassOnly => in } (referenceTypeID.hlist.as[ClassOnly])
+				.\ (5) { case in: ClassMatch => in } (string.hlist.as[ClassMatch])
+				.\ (6) { case in: ClassExclude => in } (string.hlist.as[ClassExclude])
+				.\ (7) { case in: LocationOnly => in } (location.hlist.as[LocationOnly])
+				.\ (8) { case in: ExceptionOnly => in } ((referenceTypeID :: boolean :: boolean).as[ExceptionOnly])
+				.\ (9) { case in: FieldOnly => in } ((referenceTypeID :: fieldID).as[FieldOnly])
+				.\ (10) { case in: Step => in } ((threadID :: int :: int).as[Step])
+				.\ (11) { case in: InstanceOnly => in } (objectID.hlist.as[InstanceOnly])
+				.\ (12) { case in: SourceNameMatch => in } (string.hlist.as[SourceNameMatch])
+		)
 }
 
 sealed trait CompositeEvent
@@ -49,3 +66,16 @@ case class FieldAccess(requestID: RequestId, threadID: ThreadId, location: Locat
 case class FieldModification(requestID: RequestId, threadID: ThreadId, location: Location, refTypeTag: Byte, referenceTypeID: ReferenceTypeId, fieldID: FieldId, taggedObjectID: TaggedObjectId, value: Value) extends CompositeEvent
 case class VMDeath(requestID: RequestId) extends CompositeEvent
 
+sealed trait EventRequestModifiers
+case class Count(count: Int) extends EventRequestModifiers
+case class Conditional(exprId: Int) extends EventRequestModifiers
+case class ThreadOnly(threadId: ThreadId) extends EventRequestModifiers
+case class ClassOnly(referenceTypeId: ReferenceTypeId) extends EventRequestModifiers
+case class ClassMatch(classPattern: String) extends EventRequestModifiers
+case class ClassExclude(classPattern: String) extends EventRequestModifiers
+case class LocationOnly(location: Location) extends EventRequestModifiers
+case class ExceptionOnly(referenceTypeId: ReferenceTypeId, caught: Boolean, uncaught: Boolean) extends EventRequestModifiers
+case class FieldOnly(referenceTypeId: ReferenceTypeId, fieldId: FieldId) extends EventRequestModifiers
+case class Step(threadId: ThreadId, size: Int, depth: Int) extends EventRequestModifiers
+case class InstanceOnly(objectId: ObjectId) extends EventRequestModifiers
+case class SourceNameMatch(sourceNamePattern: String) extends EventRequestModifiers

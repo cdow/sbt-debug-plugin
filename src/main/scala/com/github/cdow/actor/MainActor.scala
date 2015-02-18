@@ -1,13 +1,13 @@
 package com.github.cdow.actor
 
-import akka.actor.{FSM, Actor, Props}
+import akka.actor.{FSM, Props}
 import akka.util.ByteString
 import com.github.cdow.PrimitiveCodecs.RequestId
 import com.github.cdow._
 import com.github.cdow.actor.debugger.DebuggerActor
 import com.github.cdow.actor.vm.{VmMessage, VmActor}
-import com.github.cdow.commands.VMDeath
-import com.github.cdow.responses.IdSizes
+import com.github.cdow.commands.{EventRequest, VMDeath}
+import com.github.cdow.responses.{ResponseCodecs, IdSizes}
 
 trait MainState
 object MainState {
@@ -39,6 +39,7 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 
 	var queuedMessages = Seq.empty[ByteString]
 	var awaitingReponse = Map.empty[Long, CommandPacket]
+	val eventRequestManager = new EventRequestManager
 
 	startWith(Idle, ())
 
@@ -53,12 +54,19 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 			queuedMessages = queuedMessages :+ data
 			stay
 		case Event(MainMessage.VmConnected, ()) =>
+			// TODO keep response from these from going to the debugger
+			val newVmEvents = eventRequestManager.newVm()
+			newVmEvents.foreach { newVmEvent =>
+				self ! newVmEvent
+			}
+
 			queuedMessages.foreach { queuedMessage =>
 				self ! queuedMessage
 			}
 			queuedMessages = Seq.empty
 			goto(VmConnected)
 		case Event(MainMessage.DebuggerDisconnected, ()) =>
+			eventRequestManager.clearAllEvents()
 			vmActor ! VmMessage.Disconnect
 			goto(Idle)
 	}
@@ -66,27 +74,48 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 	when(VmConnected) {
 		case Event(data: ByteString, ()) =>
 			val decoded = JdwpCodecs.decodePacket(data.toArray)
+println("INITIAL:  " + decoded)
+
 			awaitingReponse = decoded match {
-				case JdwpPacket(id, cp :CommandPacket)=>
+				case JdwpPacket(id, cp :CommandPacket) =>
+					cp.command match {
+						case set :EventRequest.Set => eventRequestManager.newEventRequest(id, set)
+						case EventRequest.Clear(eventKind, requestId) => eventRequestManager.clearEvent(requestId)
+						case EventRequest.ClearAllBreakpoints => eventRequestManager.clearAllEvents()
+						case _ => // do nothing
+					}
+
 					awaitingReponse + (id -> cp)
-				case JdwpPacket(id, rp: ResponsePacket)=>
+				case JdwpPacket(id, rp: ResponsePacket) =>
 					val cp = awaitingReponse(id)
+					cp.command match {
+						case EventRequest.Set(_, _, _) =>
+							val decodedResponse = ResponseCodecs.decodeEventRequestSet(rp.data.toArray)
+							val vmRequestId = decodedResponse.requestID
+							eventRequestManager.eventRequestResponse(id, vmRequestId)
+						case _ => // do nothing
+					}
+
 					awaitingReponse - id
 			}
 
+			val toSend = decoded
+
 			if(self == sender() || debuggerActor == sender()) {
-println("DEBUGGER: " + decoded)
-				vmActor ! data
+println("DEBUGGER: " + toSend)
+				vmActor ! ByteString(JdwpCodecs.encodePacket(toSend))
 			} else {
-println("VM:       " + decoded)
-				if(!isVmDeathEvent(decoded)) {
-					debuggerActor ! data
+println("VM:       " + toSend)
+				if(!isVmDeathEvent(toSend)) {
+					debuggerActor ! ByteString(JdwpCodecs.encodePacket(toSend))
 				}
 			}
 			stay
 		case Event(MainMessage.VmDisconnected, ()) =>
+			// TODO handle case where there are still messages awaitingResponse, effects EventRequestManager
 			goto(DebuggerConnected)
 		case Event(MainMessage.DebuggerDisconnected, ()) =>
+			eventRequestManager.clearAllEvents()
 			vmActor ! VmMessage.Disconnect
 			goto(Idle)
 	}

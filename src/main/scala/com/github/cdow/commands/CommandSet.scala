@@ -1,7 +1,6 @@
 package com.github.cdow.commands
 
-import com.github.cdow.PrimitiveCodecs.byte
-import com.github.cdow.PrimitiveCodecs.int
+import com.github.cdow.PrimitiveCodecs.{RequestId, byte, int, requestId}
 import com.github.cdow.responses.IdSizes
 
 import scodec.Codec
@@ -144,7 +143,7 @@ case object ClassLoaderReference extends CommandSet {
 sealed trait EventRequestCommand extends Command
 case object EventRequest extends CommandSet {
 	case class Set(eventKind: Byte, suspendPolicy: Byte, modifiers: Seq[EventRequestModifiers]) extends EventRequestCommand
-	case class Clear(eventKind: Byte, requestId: Int) extends EventRequestCommand
+	case class Clear(eventKind: Byte, requestId: RequestId) extends EventRequestCommand
 	case object ClearAllBreakpoints extends EventRequestCommand
 }
 
@@ -274,7 +273,7 @@ object CommandCodecs {
 		}
 		.\ (15) {case in: EventRequestCommand => in} { codecs.discriminated[EventRequestCommand].by(codecs.uint8)
 			.\ (1) {case in: EventRequest.Set => in} ((byte :: byte :: CommandBody.eventRequestModifiers).as[EventRequest.Set])
-			.\ (2) {case in: EventRequest.Clear => in} ((byte :: int).as[EventRequest.Clear])
+			.\ (2) {case in: EventRequest.Clear => in} ((byte :: requestId).as[EventRequest.Clear])
 			.\ (3) {case in @ EventRequest.ClearAllBreakpoints => in} (codecs.provide(EventRequest.ClearAllBreakpoints))
 		}
 		.\ (16) {case in: StackFrameCommand => in} { codecs.discriminated[StackFrameCommand].by(codecs.uint8)

@@ -8,7 +8,7 @@ class EventRequestManager {
 	private var pendingEventRequests = Map.empty[Long, PendingRequestIdMapping]
 	private var requestIdSequence: Int = 1
 	// TODO ensure packet ids are unique
-	private var packetIdSequence: Long = Long.MinValue
+	private var packetIdSequence: Long = Int.MaxValue / 2
 
 	def newEventRequest(commandId: Long, eventRequest: EventRequest.Set): Unit = {
 		pendingEventRequests = pendingEventRequests + (commandId -> PendingRequestIdMapping(commandId, newDebuggerRequestId, eventRequest))
@@ -34,8 +34,8 @@ class EventRequestManager {
 	}
 
 	def newVm(): Seq[JdwpPacket] = {
-		// TWe can't reuse event requests that reference vm specific ids, so we just drop these
-		val filteredIdMappings = idMappings.filterNot { case RequestIdMapping(vmId, debuggerId, eventRequest) =>
+		// We can't reuse event requests that reference vm specific ids, so we just drop these
+		val filteredIdMappings = idMappings.filter { case RequestIdMapping(vmId, debuggerId, eventRequest) =>
 			eventRequest.modifiers.find { requestModifier =>
 				requestModifier.isInstanceOf[Conditional] ||
 				requestModifier.isInstanceOf[ThreadOnly] ||

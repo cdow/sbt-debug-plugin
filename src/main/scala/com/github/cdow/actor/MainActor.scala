@@ -6,8 +6,10 @@ import com.github.cdow.PrimitiveCodecs.RequestId
 import com.github.cdow._
 import com.github.cdow.actor.debugger.DebuggerActor
 import com.github.cdow.actor.vm.{VmMessage, VmActor}
-import com.github.cdow.commands.{EventRequest, VMDeath}
-import com.github.cdow.responses.{ResponseCodecs, IdSizes}
+import com.github.cdow.commands._
+import com.github.cdow.responses.{EventRequestSet, IdSizes}
+import com.github.cdow.responses.ResponseCodecs._
+import scodec.bits.ByteVector
 
 trait MainState
 object MainState {
@@ -57,7 +59,8 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 			// TODO keep response from these from going to the debugger
 			val newVmEvents = eventRequestManager.newVm()
 			newVmEvents.foreach { newVmEvent =>
-				self ! newVmEvent
+				val encodedEvent = ByteString(JdwpCodecs.encodePacket(newVmEvent))
+				self ! encodedEvent
 			}
 
 			queuedMessages.foreach { queuedMessage =>
@@ -76,6 +79,9 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 			val decoded = JdwpCodecs.decodePacket(data.toArray)
 println("INITIAL:  " + decoded)
 
+			//TODO stop using null
+			var responseCommand: CommandPacket = null
+
 			awaitingReponse = decoded match {
 				case JdwpPacket(id, cp :CommandPacket) =>
 					cp.command match {
@@ -90,24 +96,84 @@ println("INITIAL:  " + decoded)
 					val cp = awaitingReponse(id)
 					cp.command match {
 						case EventRequest.Set(_, _, _) =>
-							val decodedResponse = ResponseCodecs.decodeEventRequestSet(rp.data.toArray)
+							val decodedResponse = decodeEventRequestSet(rp.data.toArray)
 							val vmRequestId = decodedResponse.requestID
 							eventRequestManager.eventRequestResponse(id, vmRequestId)
 						case _ => // do nothing
 					}
+
+					responseCommand = cp
 
 					awaitingReponse - id
 			}
 
 			val toSend = decoded
 
+			val messageLens = shapeless.lens[JdwpPacket] >> 'message
+			val commandLens = shapeless.lens[CommandPacket] >> 'command
 			if(self == sender() || debuggerActor == sender()) {
-println("DEBUGGER: " + toSend)
-				vmActor ! ByteString(JdwpCodecs.encodePacket(toSend))
+				val clearLens = shapeless.lens[EventRequest.Clear] >> 'requestId
+				val result = messageLens.modify(toSend) {
+					case cp: CommandPacket =>
+						commandLens.modify(cp) {
+							case erc: EventRequest.Clear => clearLens.modify(erc) { requestId =>
+								// If we don't have an active event for the requestId, mark it as a system
+								// event (requestId 0) so the clear is ignored.
+								// TODO make sure this is a good way to handle this
+								eventRequestManager.toVmId(requestId).getOrElse(RequestId(0))
+							}
+							case other => other
+						}
+					case rp: ResponsePacket => rp
+				}
+
+println("DEBUGGER: " + result)
+				vmActor ! ByteString(JdwpCodecs.encodePacket(result))
 			} else {
-println("VM:       " + toSend)
 				if(!isVmDeathEvent(toSend)) {
-					debuggerActor ! ByteString(JdwpCodecs.encodePacket(toSend))
+					val compositeLens = shapeless.lens[commands.Event.Composite] >> 'events
+					val responseDataLens = shapeless.lens[ResponsePacket] >> 'data
+					val eventRequestSetDataLens = shapeless.lens[EventRequestSet] >> 'requestID
+					val result = messageLens.modify(toSend) {
+						case cp: CommandPacket =>
+							commandLens.modify(cp) {
+								case ec: commands.Event.Composite =>
+									compositeLens.modify(ec)(_.map {
+										case event: VMStart => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: SingleStep => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: Breakpoint => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: MethodEntry => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: MethodExit => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: MethodExitWithReturnValue => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: MonitorContendedEnter => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: MonitorContendedEntered => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: MonitorWait => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: MonitorWaited => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: commands.Exception => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: ThreadStart => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: commands.ThreadDeath => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: ClassPrepare => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: ClassUnload => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: FieldAccess => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: FieldModification => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+										case event: VMDeath => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
+									})
+								case other => other
+							}
+						case rp: ResponsePacket =>
+							responseCommand.command match {
+								case _: EventRequest.Set =>
+									responseDataLens.modify(rp) { data =>
+										val parsedData = decodeEventRequestSet(data.toArray)
+										val modifiedParsedData = eventRequestSetDataLens.modify(parsedData)(eventRequestManager.toDebuggerId)
+										ByteVector(encodeEventRequestSet(modifiedParsedData))
+									}
+								case _ => rp
+							}
+					}
+
+println("VM:       " + toSend)
+					debuggerActor ! ByteString(JdwpCodecs.encodePacket(result))
 				}
 			}
 			stay

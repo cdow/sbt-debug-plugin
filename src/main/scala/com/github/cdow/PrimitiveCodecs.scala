@@ -4,8 +4,7 @@ import com.github.cdow.responses.IdSizes
 import scodec.{bits, DecodingContext, Codec, codecs}
 import scodec.bits.{BitVector, ByteVector}
 import scala.annotation.tailrec
-import scalaz.{\/, \/-}
-import shapeless.HNil
+import scalaz.{-\/, \/, \/-}
 
 object PrimitiveCodecs {
 	val byte: Codec[Byte] = codecs.bytes(1).xmap(_.get(0), { in => ByteVector(in) })
@@ -101,7 +100,7 @@ object PrimitiveCodecs {
 		def encode(a: Seq[A]) = {
 			val size = times.encode(a.size)
 			val contentsSeq = a.map(values.encode)
-			val contents = contentsSeq.reduce { (progress, value) =>
+			val contents: String \/ BitVector = contentsSeq.fold(\/-(BitVector.empty)) { (progress, value) =>
 				for {
 					encProgress <- progress
 					encValue <- value

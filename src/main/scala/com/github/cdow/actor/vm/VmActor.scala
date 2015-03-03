@@ -26,6 +26,7 @@ object VmActor {
 	def props(port: Int, listener: ActorRef) = Props(new VmActor(port, listener))
 }
 
+// TODO make this a server so we don't need to poll for VMS
 class VmActor(port: Int, listener: ActorRef) extends FSM[VmState, Option[ActorRef]] {
 	import context.system
 	import VmState._
@@ -36,15 +37,15 @@ class VmActor(port: Int, listener: ActorRef) extends FSM[VmState, Option[ActorRe
 
 	when(Idle) {
 		case Event(VmMessage.Connect, None) =>
-			connect
+			connect()
 			goto(Connecting)
 	}
 
 	when(Connecting) {
 		case Event(CommandFailed(_: Connect), None) =>
-			connect
+			connect()
 			stay()
-		case Event(Tcp.Connected(remote, local), None)	 =>
+		case Event(Tcp.Connected(remote, local), None) =>
 			val connection = sender()
 			connection ! Register(self)
 			connection ! Write(HANDSHAKE)
@@ -60,6 +61,7 @@ class VmActor(port: Int, listener: ActorRef) extends FSM[VmState, Option[ActorRe
 			goto(Running)
 		case Event(_: ConnectionClosed, Some(_)) =>
 			listener ! MainMessage.VmDisconnected
+			connect()
 			goto(Connecting) using None
 		case Event(VmMessage.Disconnect, Some(connection)) =>
 			connection ! Close
@@ -69,12 +71,13 @@ class VmActor(port: Int, listener: ActorRef) extends FSM[VmState, Option[ActorRe
 	when(Running) {
 		case Event(data: ByteString, Some(connection)) =>
 			connection ! Write(data)
-			stay
+			stay()
 		case Event(Received(data), Some(_)) =>
 			listener ! data
-			stay
+			stay()
 		case Event(_: ConnectionClosed, Some(_)) =>
 			listener ! MainMessage.VmDisconnected
+			connect()
 			goto(Connecting) using None
 		case Event(VmMessage.Disconnect, Some(connection)) =>
 			connection ! Close
@@ -83,7 +86,7 @@ class VmActor(port: Int, listener: ActorRef) extends FSM[VmState, Option[ActorRe
 
 	initialize()
 
-	private def connect: Unit =
+	private def connect(): Unit =
 		IO(Tcp) ! Connect(new InetSocketAddress(port))
 }
 

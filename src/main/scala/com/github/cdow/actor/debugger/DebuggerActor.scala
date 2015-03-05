@@ -35,7 +35,7 @@ class DebuggerActor(port: Int, listener: ActorRef) extends FSM[DebuggerState, Op
 			goto(Bound)
 		case Event(CommandFailed(_: Bind), None) =>
 			context stop self
-			stay
+			stay()
 	}
 
 	when(Bound) {

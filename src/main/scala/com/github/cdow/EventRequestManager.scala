@@ -11,7 +11,10 @@ class EventRequestManager {
 	private var packetIdSequence: Long = Int.MaxValue / 2
 
 	def newEventRequest(commandId: Long, eventRequest: EventRequest.Set): Unit = {
-		pendingEventRequests = pendingEventRequests + (commandId -> PendingRequestIdMapping(commandId, newDebuggerRequestId, eventRequest))
+		// prevent overwriting of requestIds for for new VM event replay
+		if(!pendingEventRequests.contains(commandId)) {
+			pendingEventRequests = pendingEventRequests + (commandId -> PendingRequestIdMapping(commandId, newDebuggerRequestId(), eventRequest))
+		}
 	}
 
 	def eventRequestResponse(commandId: Long, vmId: RequestId): Unit = {
@@ -79,7 +82,7 @@ class EventRequestManager {
 		idMappings.find(_.debuggerId == debuggerId).map(_.vmId)
 	}
 
-	private def newDebuggerRequestId: RequestId = {
+	private def newDebuggerRequestId(): RequestId = {
 		requestIdSequence += 1
 		RequestId(requestIdSequence)
 	}

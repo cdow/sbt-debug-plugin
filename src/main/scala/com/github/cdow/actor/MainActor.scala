@@ -40,6 +40,7 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 	val vmActor = context.actorOf(VmActor.props(vmPort, self), "vm")
 
 	var queuedMessages = Seq.empty[ByteString]
+	// TODO distinguish between vm and debugger ids
 	var awaitingReponse = Map.empty[Long, CommandPacket]
 	val eventRequestManager = new EventRequestManager
 

@@ -7,4 +7,4 @@ case class JdwpPacket(id: Long, message: JdwpMessage)
 
 sealed trait JdwpMessage
 case class CommandPacket(command: Command) extends JdwpMessage
-case class ResponsePacket(errorCode: Int,data: ByteVector) extends JdwpMessage
+case class ResponsePacket(errorCode: Int, data: ByteVector) extends JdwpMessage

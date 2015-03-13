@@ -41,7 +41,7 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 
 	var queuedMessages = Seq.empty[ByteString]
 	// TODO distinguish between vm and debugger ids
-	var awaitingReponse = Map.empty[Long, CommandPacket]
+	var awaitingReponse = Map.empty[Long, Command]
 	val eventRequestManager = new EventRequestManager
 
 	startWith(Idle, ())
@@ -78,47 +78,45 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 	when(VmConnected) {
 		case Event(data: ByteString, ()) =>
 			val decoded = JdwpCodecs.decodePacket(data.toArray)
-println("INITIAL:  " + decoded)
 
-			//TODO stop using null
-			var responseCommand: CommandPacket = null
+			val packetInfo = toPacketInfo(decoded)
+println("INITIAL:  " + packetInfo)
+			awaitingReponse = packetInfo match {
+				case CommandInfo(id, command) =>
+					awaitingReponse + (id -> command)
+				case ResponseInfo(id, _, _, _) =>
+					awaitingReponse - id
+			}
 
-			awaitingReponse = decoded match {
-				case JdwpPacket(id, cp :CommandPacket) =>
-					cp.command match {
+			packetInfo match {
+				case CommandInfo(id, command) =>
+					command match {
 						case set :EventRequest.Set => eventRequestManager.newEventRequest(id, set)
 						case EventRequest.Clear(eventKind, requestId) => eventRequestManager.clearEvent(requestId)
 						case EventRequest.ClearAllBreakpoints => eventRequestManager.clearAllEvents()
 						case _ => // do nothing
 					}
-
-					awaitingReponse + (id -> cp)
-				case JdwpPacket(id, rp: ResponsePacket) =>
-					val cp = awaitingReponse(id)
-					cp.command match {
+				case ResponseInfo(id, _, data, command) =>
+					command match {
 						case EventRequest.Set(_, _, _) =>
-							val decodedResponse = decodeEventRequestSet(rp.data.toArray)
+							val decodedResponse = decodeEventRequestSet(data.toArray)
 							val vmRequestId = decodedResponse.requestID
 							eventRequestManager.eventRequestResponse(id, vmRequestId)
 						case _ => // do nothing
 					}
-
-					responseCommand = cp
-
-					awaitingReponse - id
 			}
 
 			if(self == sender() || debuggerActor == sender()) {
-				val result = convertToVmRequestIds(decoded)
+				val result = convertToVmRequestIds(packetInfo)
 
 println("DEBUGGER: " + result)
-				vmActor ! ByteString(JdwpCodecs.encodePacket(result))
+				vmActor ! ByteString(JdwpCodecs.encodePacket(result.toJdwpPacket))
 			} else {
 				if(!isVmDeathEvent(decoded)) {
-					val result = convertToDebuggerRequestIds(decoded, responseCommand)
+					val result = convertToDebuggerRequestIds(packetInfo)
 
 println("VM:       " + result)
-					debuggerActor ! ByteString(JdwpCodecs.encodePacket(result))
+					debuggerActor ! ByteString(JdwpCodecs.encodePacket(result.toJdwpPacket))
 				}
 			}
 			stay
@@ -140,22 +138,33 @@ println("VM:       " + result)
 		}
 	}
 
-	trait PacketInfo
-	object PacketInfo {
-		case class CommandInfo(id: Long, command: Command) extends PacketInfo
-		case class ReplyInf(id: Long, replyErrorCode: Int, replyData: ByteVector, command: Command) extends PacketInfo
+	trait PacketInfo {
+		def toJdwpPacket: JdwpPacket
+	}
+	case class ResponseInfo(id: Long, errorCode: Int, data: ByteVector, originalCommand: Command) extends PacketInfo {
+		override def toJdwpPacket: JdwpPacket = JdwpPacket(id, ResponsePacket(errorCode, data))
+	}
+	case class CommandInfo(id: Long, command: Command) extends PacketInfo {
+		override def toJdwpPacket: JdwpPacket = JdwpPacket(id, CommandPacket(command))
+	}
+
+	def toPacketInfo(packet: JdwpPacket): PacketInfo = packet match {
+		case JdwpPacket(id, cp :CommandPacket) => CommandInfo(id, cp.command)
+		case JdwpPacket(id, rp: ResponsePacket) =>
+			val command = awaitingReponse(id)
+			ResponseInfo(id, rp.errorCode, rp.data, command)
 	}
 
 	// These requestId conversions would be so much easier if the compiler didn't choke on shapeless.everything
 	private val messageLens = shapeless.lens[JdwpPacket] >> 'message
-	private val commandLens = shapeless.lens[CommandPacket] >> 'command
-	private def convertToDebuggerRequestIds(vmPacket: JdwpPacket, responseCommand: CommandPacket): JdwpPacket = {
+	private val commandLens = shapeless.lens[CommandInfo] >> 'command
+	private def convertToDebuggerRequestIds(packetInfo: PacketInfo): PacketInfo = {
 		val compositeLens = shapeless.lens[commands.Event.Composite] >> 'events
-		val responseDataLens = shapeless.lens[ResponsePacket] >> 'data
+		val responseInfoDataLens = shapeless.lens[ResponseInfo] >> 'data
 		val eventRequestSetDataLens = shapeless.lens[EventRequestSet] >> 'requestID
-		messageLens.modify(vmPacket) {
-			case cp: CommandPacket =>
-				commandLens.modify(cp) {
+		packetInfo match {
+			case ci: CommandInfo =>
+				commandLens.modify(ci) {
 					case ec: commands.Event.Composite =>
 						compositeLens.modify(ec)(_.map {
 							case event: VMStart => event.copy(requestID = eventRequestManager.toDebuggerId(event.requestID))
@@ -179,24 +188,24 @@ println("VM:       " + result)
 						})
 					case other => other
 				}
-			case rp: ResponsePacket =>
-				responseCommand.command match {
+			case ri: ResponseInfo =>
+				ri.originalCommand match {
 					case _: EventRequest.Set =>
-						responseDataLens.modify(rp) { data =>
+						responseInfoDataLens.modify(ri) { data =>
 							val parsedData = decodeEventRequestSet(data.toArray)
 							val modifiedParsedData = eventRequestSetDataLens.modify(parsedData)(eventRequestManager.toDebuggerId)
 							ByteVector(encodeEventRequestSet(modifiedParsedData))
 						}
-					case _ => rp
+					case _ => ri
 				}
 		}
 	}
 
-	private def convertToVmRequestIds(debuggerPacket: JdwpPacket): JdwpPacket = {
+	private def convertToVmRequestIds(packetInfo: PacketInfo): PacketInfo = {
 		val clearLens = shapeless.lens[EventRequest.Clear] >> 'requestId
-		messageLens.modify(debuggerPacket) {
-			case cp: CommandPacket =>
-				commandLens.modify(cp) {
+		packetInfo match {
+			case ci: CommandInfo =>
+				commandLens.modify(ci) {
 					case erc: EventRequest.Clear => clearLens.modify(erc) { requestId =>
 						// If we don't have an active event for the requestId, mark it as a system
 						// event (requestId 0) so the clear is ignored.
@@ -205,7 +214,7 @@ println("VM:       " + result)
 					}
 					case other => other
 				}
-			case rp: ResponsePacket => rp
+			case ri: ResponseInfo => ri
 		}
 	}
 }

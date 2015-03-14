@@ -5,3 +5,5 @@ javaOptions in run ++= Seq("-Xmx256m", "-agentlib:jdwp=transport=dt_socket,addre
 scalacOptions += "-g:vars"
 
 debugSettings
+
+logLevel in debugStart := Level.Debug

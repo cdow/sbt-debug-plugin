@@ -26,19 +26,20 @@ object DebugPlugin extends Plugin {
 		onUnload in Global := {
 			(onUnload in Global).value.andThen { state =>
 				state.get(debugProxyAttribute).foreach { proxy =>
-					proxy.stop
+					proxy.stop()
 				}
 				state.remove(debugProxyAttribute)
 			}
 		},
 		debugStart := {
+			val logger = streams.value.log
 			state.value.get(debugProxyAttribute).foreach { proxy =>
-				proxy.start
+				proxy.start(logger)
 			}
 		},
 		debugStop := {
 			state.value.get(debugProxyAttribute).foreach { proxy =>
-				proxy.stop
+				proxy.stop()
 			}
 		})
 
@@ -46,16 +47,16 @@ object DebugPlugin extends Plugin {
 		var actorSystem: Option[ActorSystem] = None
 
 		def stop(): Unit = {
-			actorSystem.foreach(_.shutdown)
+			actorSystem.foreach(_.shutdown())
 			actorSystem = None
 		}
 
-		def start(): Unit = {
+		def start(logger: Logger): Unit = {
 			actorSystem = actorSystem.orElse {
 				val config = ConfigFactory.parseString("")
 				// Default config does not load unless we specify a custom classloader
 				val system = ActorSystem("main", config, getClass.getClassLoader)
-				system.actorOf(MainActor.props(debuggerPort, vmPort))
+				system.actorOf(MainActor.props(debuggerPort, vmPort, logger))
 				Some(system)
 			}
 		}

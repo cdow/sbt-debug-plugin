@@ -9,6 +9,7 @@ import com.github.cdow.actor.vm.{VmMessage, VmActor}
 import com.github.cdow.commands._
 import com.github.cdow.responses.{EventRequestSet, IdSizes}
 import com.github.cdow.responses.ResponseCodecs._
+import sbt.Logger
 import scodec.bits.ByteVector
 
 trait MainState
@@ -27,10 +28,10 @@ object MainMessage {
 }
 
 object MainActor {
-	def props(debuggerPort: Int, vmPort: Int) = Props(new MainActor(debuggerPort, vmPort))
+	def props(debuggerPort: Int, vmPort: Int, logger: Logger) = Props(new MainActor(debuggerPort, vmPort, logger))
 }
 
-class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
+class MainActor(debuggerPort: Int, vmPort: Int, logger: Logger) extends FSM[MainState, Unit] {
 	import MainState._
 
 	// TODO determine this dynamically
@@ -80,7 +81,8 @@ class MainActor(debuggerPort: Int, vmPort: Int) extends FSM[MainState, Unit] {
 			val decoded = JdwpCodecs.decodePacket(data.toArray)
 
 			val packetInfo = toPacketInfo(decoded)
-println("INITIAL:  " + packetInfo)
+			logger.debug("INITIAL:  " + packetInfo)
+
 			awaitingReponse = packetInfo match {
 				case CommandInfo(id, command) =>
 					awaitingReponse + (id -> command)
@@ -109,13 +111,13 @@ println("INITIAL:  " + packetInfo)
 			if(self == sender() || debuggerActor == sender()) {
 				val result = convertToVmRequestIds(packetInfo)
 
-println("DEBUGGER: " + result)
+				logger.debug("DEBUGGER: " + result)
 				vmActor ! ByteString(JdwpCodecs.encodePacket(result.toJdwpPacket))
 			} else {
 				if(!isVmDeathEvent(decoded)) {
 					val result = convertToDebuggerRequestIds(packetInfo)
 
-println("VM:       " + result)
+					logger.debug("VM:       " + result)
 					debuggerActor ! ByteString(JdwpCodecs.encodePacket(result.toJdwpPacket))
 				}
 			}

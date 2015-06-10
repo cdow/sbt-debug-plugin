@@ -41,7 +41,7 @@ class ReferenceTypeIdManager(idSizes: IdSizes) {
 				byte
 			}
 
-			(incremented +: incrementedAlready, incremented == 0)
+			(incremented +: incrementedAlready, carry && incremented == 0)
 		}
 
 		result

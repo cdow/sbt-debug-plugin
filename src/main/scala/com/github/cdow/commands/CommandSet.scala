@@ -1,6 +1,6 @@
 package com.github.cdow.commands
 
-import com.github.cdow.PrimitiveCodecs.{RequestId, byte, int, requestId}
+import com.github.cdow.PrimitiveCodecs._
 import com.github.cdow.responses.IdSizes
 
 import scodec.Codec
@@ -29,45 +29,46 @@ object VirtualMachine extends CommandSet {
 	case class HoldEvents(data: ByteVector) extends VirtualMachineCommand
 	case class ReleaseEvents(data: ByteVector) extends VirtualMachineCommand
 	case class CapabilitiesNew(data: ByteVector) extends VirtualMachineCommand
-	case class RedefineClasses(data: ByteVector) extends VirtualMachineCommand
+	case class RedefineClasses(classes: Seq[ClassDefinition]) extends VirtualMachineCommand
 	case class SetDefaultStratum(data: ByteVector) extends VirtualMachineCommand
 	case class AllClassesWithGeneric(data: ByteVector) extends VirtualMachineCommand
-	case class InstanceCounts(data: ByteVector) extends VirtualMachineCommand
+	case class InstanceCounts(referenceTypeIDs: Seq[ReferenceTypeId] ) extends VirtualMachineCommand
 }
 
 sealed trait ReferenceTypeCommand extends Command
 case object ReferenceType extends CommandSet {
-	case class Signature(data: ByteVector) extends ReferenceTypeCommand
-	case class ClassLoader(data: ByteVector) extends ReferenceTypeCommand
-	case class Modifiers(data: ByteVector) extends ReferenceTypeCommand
-	case class Fields(data: ByteVector) extends ReferenceTypeCommand
-	case class Methods(data: ByteVector) extends ReferenceTypeCommand
-	case class GetValues(data: ByteVector) extends ReferenceTypeCommand
-	case class SourceFile(data: ByteVector) extends ReferenceTypeCommand
-	case class NestedTypes(data: ByteVector) extends ReferenceTypeCommand
-	case class Status(data: ByteVector) extends ReferenceTypeCommand
-	case class Interfaces(data: ByteVector) extends ReferenceTypeCommand
-	case class ClassObject(data: ByteVector) extends ReferenceTypeCommand
-	case class SourceDebugExtension(data: ByteVector) extends ReferenceTypeCommand
-	case class SignatureWithGeneric(data: ByteVector) extends ReferenceTypeCommand
-	case class FieldsWithGeneric(data: ByteVector) extends ReferenceTypeCommand
-	case class MethodsWithGeneric(data: ByteVector) extends ReferenceTypeCommand
-	case class Instances(data: ByteVector) extends ReferenceTypeCommand
-	case class ClassFileVersion(data: ByteVector) extends ReferenceTypeCommand
-	case class ConstantPool(data: ByteVector) extends ReferenceTypeCommand
+	case class Signature(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class ClassLoader(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class Modifiers(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class Fields(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class Methods(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class GetValues(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class SourceFile(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class NestedTypes(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class Status(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class Interfaces(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class ClassObject(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class SourceDebugExtension(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class SignatureWithGeneric(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class FieldsWithGeneric(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class MethodsWithGeneric(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class Instances(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class ClassFileVersion(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
+	case class ConstantPool(referenceTypeID: ReferenceTypeId) extends ReferenceTypeCommand
 }
 
 sealed trait ClassTypeCommand extends Command
 case object ClassType extends CommandSet {
-	case class Superclass(data: ByteVector) extends ClassTypeCommand
-	case class SetValues(data: ByteVector) extends ClassTypeCommand
-	case class InvokeMethod(data: ByteVector) extends ClassTypeCommand
-	case class NewInstance(data: ByteVector) extends ClassTypeCommand
+	case class Superclass(clazz: ClassId) extends ClassTypeCommand
+	// TODO parse the rest of this once we can parse untagged-values
+	case class SetValues(clazz: ClassId, data: ByteVector) extends ClassTypeCommand
+	case class InvokeMethod(clazz: ClassId, threadID: ThreadId, methodID: MethodId, values: Seq[Value], options: Int) extends ClassTypeCommand
+	case class NewInstance(clazz: ClassId, threadID: ThreadId, methodID: MethodId, values: Seq[Value], options: Int) extends ClassTypeCommand
 }
 
 sealed trait ArrayTypeCommand extends Command
 case object ArrayType extends CommandSet {
-	case class NewInstance(data: ByteVector) extends ArrayTypeCommand
+	case class NewInstance(arrayTypeID: ArrayTypeId, length: Int) extends ArrayTypeCommand
 }
 
 sealed trait InterfaceTypeCommand extends Command
@@ -75,11 +76,11 @@ case object InterfaceType extends CommandSet
 
 sealed trait MethodCommand extends Command
 case object Method extends CommandSet {
-	case class LineTable(data: ByteVector) extends MethodCommand
-	case class VariableTable(data: ByteVector) extends MethodCommand
-	case class Bytecodes(data: ByteVector) extends MethodCommand
-	case class IsObsolete(data: ByteVector) extends MethodCommand
-	case class VariableTableWithGeneric(data: ByteVector) extends MethodCommand
+	case class LineTable(referenceTypeID: ReferenceTypeId, methodID: MethodId) extends MethodCommand
+	case class VariableTable(referenceTypeID: ReferenceTypeId, methodID: MethodId) extends MethodCommand
+	case class Bytecodes(referenceTypeID: ReferenceTypeId, methodID: MethodId) extends MethodCommand
+	case class IsObsolete(referenceTypeID: ReferenceTypeId, methodID: MethodId) extends MethodCommand
+	case class VariableTableWithGeneric(referenceTypeID: ReferenceTypeId, methodID: MethodId) extends MethodCommand
 }
 
 sealed trait FieldCommand extends Command
@@ -185,47 +186,47 @@ object CommandCodecs {
 			.\ (15) {case in: VirtualMachine.HoldEvents => in} (codecs.bytes.hlist.as[VirtualMachine.HoldEvents])
 			.\ (16) {case in: VirtualMachine.ReleaseEvents => in} (codecs.bytes.hlist.as[VirtualMachine.ReleaseEvents])
 			.\ (17) {case in: VirtualMachine.CapabilitiesNew => in} (codecs.bytes.hlist.as[VirtualMachine.CapabilitiesNew])
-			.\ (18) {case in: VirtualMachine.RedefineClasses => in} (codecs.bytes.hlist.as[VirtualMachine.RedefineClasses])
+			.\ (18) {case in: VirtualMachine.RedefineClasses => in} (CommandBody.classDefinitions.hlist.as[VirtualMachine.RedefineClasses])
 			.\ (19) {case in: VirtualMachine.SetDefaultStratum => in} (codecs.bytes.hlist.as[VirtualMachine.SetDefaultStratum])
 			.\ (20) {case in: VirtualMachine.AllClassesWithGeneric => in} (codecs.bytes.hlist.as[VirtualMachine.AllClassesWithGeneric])
-			.\ (21) {case in: VirtualMachine.InstanceCounts => in} (codecs.bytes.hlist.as[VirtualMachine.InstanceCounts])
+			.\ (21) {case in: VirtualMachine.InstanceCounts => in} (times(int, referenceTypeID).hlist.as[VirtualMachine.InstanceCounts])
 		}
 		.\ (2) {case in: ReferenceTypeCommand => in} { codecs.discriminated[ReferenceTypeCommand].by(codecs.uint8)
-			.\ (1) {case in: ReferenceType.Signature => in} (codecs.bytes.hlist.as[ReferenceType.Signature])
-			.\ (2) {case in: ReferenceType.ClassLoader => in} (codecs.bytes.hlist.as[ReferenceType.ClassLoader])
-			.\ (3) {case in: ReferenceType.Modifiers => in} (codecs.bytes.hlist.as[ReferenceType.Modifiers])
-			.\ (4) {case in: ReferenceType.Fields => in} (codecs.bytes.hlist.as[ReferenceType.Fields])
-			.\ (5) {case in: ReferenceType.Methods => in} (codecs.bytes.hlist.as[ReferenceType.Methods])
-			.\ (6) {case in: ReferenceType.GetValues => in} (codecs.bytes.hlist.as[ReferenceType.GetValues])
-			.\ (7) {case in: ReferenceType.SourceFile => in} (codecs.bytes.hlist.as[ReferenceType.SourceFile])
-			.\ (8) {case in: ReferenceType.NestedTypes => in} (codecs.bytes.hlist.as[ReferenceType.NestedTypes])
-			.\ (9) {case in: ReferenceType.Status => in} (codecs.bytes.hlist.as[ReferenceType.Status])
-			.\ (10) {case in: ReferenceType.Interfaces => in} (codecs.bytes.hlist.as[ReferenceType.Interfaces])
-			.\ (11) {case in: ReferenceType.ClassObject => in} (codecs.bytes.hlist.as[ReferenceType.ClassObject])
-			.\ (12) {case in: ReferenceType.SourceDebugExtension => in} (codecs.bytes.hlist.as[ReferenceType.SourceDebugExtension])
-			.\ (13) {case in: ReferenceType.SignatureWithGeneric => in} (codecs.bytes.hlist.as[ReferenceType.SignatureWithGeneric])
-			.\ (14) {case in: ReferenceType.FieldsWithGeneric => in} (codecs.bytes.hlist.as[ReferenceType.FieldsWithGeneric])
-			.\ (15) {case in: ReferenceType.MethodsWithGeneric => in} (codecs.bytes.hlist.as[ReferenceType.MethodsWithGeneric])
-			.\ (16) {case in: ReferenceType.Instances => in} (codecs.bytes.hlist.as[ReferenceType.Instances])
-			.\ (17) {case in: ReferenceType.ClassFileVersion => in} (codecs.bytes.hlist.as[ReferenceType.ClassFileVersion])
-			.\ (18) {case in: ReferenceType.ConstantPool => in} (codecs.bytes.hlist.as[ReferenceType.ConstantPool])
+			.\ (1) {case in: ReferenceType.Signature => in} (referenceTypeID.hlist.as[ReferenceType.Signature])
+			.\ (2) {case in: ReferenceType.ClassLoader => in} (referenceTypeID.hlist.as[ReferenceType.ClassLoader])
+			.\ (3) {case in: ReferenceType.Modifiers => in} (referenceTypeID.hlist.as[ReferenceType.Modifiers])
+			.\ (4) {case in: ReferenceType.Fields => in} (referenceTypeID.hlist.as[ReferenceType.Fields])
+			.\ (5) {case in: ReferenceType.Methods => in} (referenceTypeID.hlist.as[ReferenceType.Methods])
+			.\ (6) {case in: ReferenceType.GetValues => in} (referenceTypeID.hlist.as[ReferenceType.GetValues])
+			.\ (7) {case in: ReferenceType.SourceFile => in} (referenceTypeID.hlist.as[ReferenceType.SourceFile])
+			.\ (8) {case in: ReferenceType.NestedTypes => in} (referenceTypeID.hlist.as[ReferenceType.NestedTypes])
+			.\ (9) {case in: ReferenceType.Status => in} (referenceTypeID.hlist.as[ReferenceType.Status])
+			.\ (10) {case in: ReferenceType.Interfaces => in} (referenceTypeID.hlist.as[ReferenceType.Interfaces])
+			.\ (11) {case in: ReferenceType.ClassObject => in} (referenceTypeID.hlist.as[ReferenceType.ClassObject])
+			.\ (12) {case in: ReferenceType.SourceDebugExtension => in} (referenceTypeID.hlist.as[ReferenceType.SourceDebugExtension])
+			.\ (13) {case in: ReferenceType.SignatureWithGeneric => in} (referenceTypeID.hlist.as[ReferenceType.SignatureWithGeneric])
+			.\ (14) {case in: ReferenceType.FieldsWithGeneric => in} (referenceTypeID.hlist.as[ReferenceType.FieldsWithGeneric])
+			.\ (15) {case in: ReferenceType.MethodsWithGeneric => in} (referenceTypeID.hlist.as[ReferenceType.MethodsWithGeneric])
+			.\ (16) {case in: ReferenceType.Instances => in} (referenceTypeID.hlist.as[ReferenceType.Instances])
+			.\ (17) {case in: ReferenceType.ClassFileVersion => in} (referenceTypeID.hlist.as[ReferenceType.ClassFileVersion])
+			.\ (18) {case in: ReferenceType.ConstantPool => in} (referenceTypeID.hlist.as[ReferenceType.ConstantPool])
 		}
 		.\ (3) {case in: ClassTypeCommand => in} { codecs.discriminated[ClassTypeCommand].by(codecs.uint8)
-			.\ (1) {case in: ClassType.Superclass => in} (codecs.bytes.hlist.as[ClassType.Superclass])
-			.\ (2) {case in: ClassType.SetValues => in} (codecs.bytes.hlist.as[ClassType.SetValues])
-			.\ (3) {case in: ClassType.InvokeMethod => in} (codecs.bytes.hlist.as[ClassType.InvokeMethod])
-			.\ (4) {case in: ClassType.NewInstance => in} (codecs.bytes.hlist.as[ClassType.NewInstance])
+			.\ (1) {case in: ClassType.Superclass => in} (classID.hlist.as[ClassType.Superclass])
+			.\ (2) {case in: ClassType.SetValues => in} ((classID :: codecs.bytes).as[ClassType.SetValues])
+			.\ (3) {case in: ClassType.InvokeMethod => in} ((classID :: threadID :: methodID :: times(int, value) :: int).as[ClassType.InvokeMethod])
+			.\ (4) {case in: ClassType.NewInstance => in} ((classID :: threadID :: methodID :: times(int, value) :: int).as[ClassType.NewInstance])
 		}
 		.\ (4) {case in: ArrayTypeCommand => in} { codecs.discriminated[ArrayTypeCommand].by(codecs.uint8)
-			.\ (1) {case in: ArrayType.NewInstance => in} (codecs.bytes.hlist.as[ArrayType.NewInstance])
+			.\ (1) {case in: ArrayType.NewInstance => in} ((arrayTypeID :: int).as[ArrayType.NewInstance])
 		}
 		.\ (5) {case in: InterfaceTypeCommand => in} { codecs.discriminated[InterfaceTypeCommand].by(codecs.uint8) }
 		.\ (6) {case in: MethodCommand => in} { codecs.discriminated[MethodCommand].by(codecs.uint8)
-			.\ (1) {case in: Method.LineTable => in} (codecs.bytes.hlist.as[Method.LineTable])
-			.\ (2) {case in: Method.VariableTable => in} (codecs.bytes.hlist.as[Method.VariableTable])
-			.\ (3) {case in: Method.Bytecodes => in} (codecs.bytes.hlist.as[Method.Bytecodes])
-			.\ (4) {case in: Method.IsObsolete => in} (codecs.bytes.hlist.as[Method.IsObsolete])
-			.\ (5) {case in: Method.VariableTableWithGeneric => in} (codecs.bytes.hlist.as[Method.VariableTableWithGeneric])
+			.\ (1) {case in: Method.LineTable => in} ((referenceTypeID :: methodID).as[Method.LineTable])
+			.\ (2) {case in: Method.VariableTable => in} ((referenceTypeID :: methodID).as[Method.VariableTable])
+			.\ (3) {case in: Method.Bytecodes => in} ((referenceTypeID :: methodID).as[Method.Bytecodes])
+			.\ (4) {case in: Method.IsObsolete => in} ((referenceTypeID :: methodID).as[Method.IsObsolete])
+			.\ (5) {case in: Method.VariableTableWithGeneric => in} ((referenceTypeID :: methodID).as[Method.VariableTableWithGeneric])
 		}
 		.\ (8) {case in: FieldCommand => in} { codecs.discriminated[FieldCommand].by(codecs.uint8) }
 		.\ (9) {case in: ObjectReferenceCommand => in} { codecs.discriminated[ObjectReferenceCommand].by(codecs.uint8)

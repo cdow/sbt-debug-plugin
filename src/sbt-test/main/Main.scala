@@ -8,5 +8,6 @@ object Main {
 }
 
 class Test {
+	val testField = "test value"
 	println("test")
 }

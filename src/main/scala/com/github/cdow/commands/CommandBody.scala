@@ -44,6 +44,9 @@ object CommandBody {
 				.\ (11) { case in: InstanceOnly => in } (objectID.hlist.as[InstanceOnly])
 				.\ (12) { case in: SourceNameMatch => in } (string.hlist.as[SourceNameMatch])
 		)
+
+	def classDefinitions(implicit idSizes: IdSizes): Codec[Seq[ClassDefinition]] =
+		times(int, (referenceTypeID :: times(int, byte)).as[ClassDefinition])
 }
 
 sealed trait CompositeEvent
@@ -70,12 +73,14 @@ sealed trait EventRequestModifiers
 case class Count(count: Int) extends EventRequestModifiers
 case class Conditional(exprId: Int) extends EventRequestModifiers
 case class ThreadOnly(threadId: ThreadId) extends EventRequestModifiers
-case class ClassOnly(referenceTypeId: ReferenceTypeId) extends EventRequestModifiers
+case class ClassOnly(referenceTypeID: ReferenceTypeId) extends EventRequestModifiers
 case class ClassMatch(classPattern: String) extends EventRequestModifiers
 case class ClassExclude(classPattern: String) extends EventRequestModifiers
 case class LocationOnly(location: Location) extends EventRequestModifiers
-case class ExceptionOnly(referenceTypeId: ReferenceTypeId, caught: Boolean, uncaught: Boolean) extends EventRequestModifiers
-case class FieldOnly(referenceTypeId: ReferenceTypeId, fieldId: FieldId) extends EventRequestModifiers
+case class ExceptionOnly(referenceTypeID: ReferenceTypeId, caught: Boolean, uncaught: Boolean) extends EventRequestModifiers
+case class FieldOnly(referenceTypeID: ReferenceTypeId, fieldId: FieldId) extends EventRequestModifiers
 case class Step(threadId: ThreadId, size: Int, depth: Int) extends EventRequestModifiers
 case class InstanceOnly(objectId: ObjectId) extends EventRequestModifiers
 case class SourceNameMatch(sourceNamePattern: String) extends EventRequestModifiers
+
+case class ClassDefinition(referenceTypeID: ReferenceTypeId, bytes: Seq[Byte])

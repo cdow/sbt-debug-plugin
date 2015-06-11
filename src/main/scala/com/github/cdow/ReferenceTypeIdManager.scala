@@ -10,22 +10,31 @@ class ReferenceTypeIdManager(idSizes: IdSizes) {
 	// TODO return errors instead of putting in an incorrect id
 	val errorId = ReferenceTypeId(ByteVector.high(referenceTypeIdSize))
 	val referenceTypeIdSize = idSizes.referenceTypeId
-	var referenceTypeIdCount = ByteVector.low(referenceTypeIdSize)
+	val nullId = ReferenceTypeId(ByteVector.low(referenceTypeIdSize))
+	var referenceTypeIdCount = increment(ByteVector.low(referenceTypeIdSize)) // increment because low is reserved for 'null'
 	var referenceTypeIdMapping = Map.empty[ReferenceTypeId, ReferenceTypeId] // VM -> debugger
 
 	def toDebuggerId(vmId: ReferenceTypeId): ReferenceTypeId = {
-		referenceTypeIdMapping.getOrElse(vmId, {
-			val newDebuggerId = ReferenceTypeId(referenceTypeIdCount)
+		if(vmId == nullId) {
+			vmId
+		} else {
+			referenceTypeIdMapping.getOrElse(vmId, {
+				val newDebuggerId = ReferenceTypeId(referenceTypeIdCount)
 
-			referenceTypeIdCount = increment(referenceTypeIdCount)
-			referenceTypeIdMapping = referenceTypeIdMapping + (vmId -> newDebuggerId)
+				referenceTypeIdCount = increment(referenceTypeIdCount)
+				referenceTypeIdMapping = referenceTypeIdMapping + (vmId -> newDebuggerId)
 
-			newDebuggerId
-		})
+				newDebuggerId
+			})
+		}
 	}
 
 	def toVmId(debuggerId: ReferenceTypeId): ReferenceTypeId = {
-		referenceTypeIdMapping.find(_._2 == debuggerId).map(_._1).getOrElse(errorId)
+		if(debuggerId == nullId) {
+			debuggerId
+		} else {
+			referenceTypeIdMapping.find(_._2 == debuggerId).map(_._1).getOrElse(errorId)
+		}
 	}
 
 	def newVm(): Unit = {

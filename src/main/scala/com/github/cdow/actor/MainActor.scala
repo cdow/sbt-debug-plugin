@@ -82,51 +82,60 @@ class MainActor(debuggerPort: Int, vmPort: Int, logger: Logger) extends FSM[Main
 
 	when(VmConnected) {
 		case Event(data: ByteString, ()) =>
-			val decoded = JdwpCodecs.decodePacket(data.toArray)
+			val decodedPackets = JdwpCodecs.decodePackets(data.toArray)
 
-			val packetInfo = toPacketInfo(decoded)
-			logger.debug("INITIAL:  " + packetInfo)
+			decodedPackets.foreach { decoded =>
+				val packetInfo = toPacketInfo(decoded)
+				logger.debug("INITIAL:  " + packetInfo)
 
-			awaitingReponse = packetInfo match {
-				case CommandInfo(id, command) =>
-					awaitingReponse + (id -> command)
-				case ResponseInfo(id, _, _, _) =>
-					awaitingReponse - id
-			}
-
-			packetInfo match {
-				case CommandInfo(id, command) =>
-					command match {
-						case set :EventRequest.Set => eventRequestManager.newEventRequest(id, set)
-						case EventRequest.Clear(eventKind, requestId) => eventRequestManager.clearEvent(requestId)
-						case EventRequest.ClearAllBreakpoints => eventRequestManager.clearAllEvents()
-						case _ => // do nothing
-					}
-				case ResponseInfo(id, _, data, command) =>
-					command match {
-						case EventRequest.Set(_, _, _) =>
-							val decodedResponse = decodeEventRequestSet(data.toArray)
-							val vmRequestId = decodedResponse.requestID
-							eventRequestManager.eventRequestResponse(id, vmRequestId)
-						case _ => // do nothing
-					}
-			}
-
-			if(self == sender() || debuggerActor == sender()) {
-				val requestIdsConverted = convertToVmRequestIds(packetInfo)
-				val result = convertToVmReferenceTypeIds(requestIdsConverted)
-
-				logger.debug("DEBUGGER: " + result)
-				vmActor ! ByteString(JdwpCodecs.encodePacket(result.toJdwpPacket))
-			} else {
-				if(!isVmDeathEvent(decoded)) {
-					val requestIdsConverted = convertToDebuggerRequestIds(packetInfo)
-					val result = convertToDebuggerReferenceTypeIds(requestIdsConverted)
-
-					logger.debug("VM:       " + result)
-					debuggerActor ! ByteString(JdwpCodecs.encodePacket(result.toJdwpPacket))
+				awaitingReponse = packetInfo match {
+					case CommandInfo(id, command) =>
+						awaitingReponse + (id -> command)
+					case ResponseInfo(id, _, _, _) =>
+						awaitingReponse - id
 				}
+
+				packetInfo match {
+					case CommandInfo(id, command) =>
+						command match {
+							case set: EventRequest.Set => eventRequestManager.newEventRequest(id, set)
+							case EventRequest.Clear(eventKind, requestId) => eventRequestManager.clearEvent(requestId)
+							case EventRequest.ClearAllBreakpoints => eventRequestManager.clearAllEvents()
+							case _ => // do nothing
+						}
+					case ResponseInfo(id, _, data, command) =>
+						command match {
+							case EventRequest.Set(_, _, _) =>
+								val decodedResponse = decodeEventRequestSet(data.toArray)
+								val vmRequestId = decodedResponse.requestID
+								eventRequestManager.eventRequestResponse(id, vmRequestId)
+							case _ => // do nothing
+						}
+				}
+
+				if (self == sender() || debuggerActor == sender()) {
+					val requestIdsConverted = convertToVmRequestIds(packetInfo)
+					val result = convertToVmReferenceTypeIds(requestIdsConverted)
+
+					logger.debug("DEBUGGER: " + result)
+					vmActor ! ByteString(JdwpCodecs.encodePacket(result.toJdwpPacket))
+				} else {
+					if (!isVmDeathEvent(decoded)) {
+						val requestIdsConverted = convertToDebuggerRequestIds(packetInfo)
+						val result = convertToDebuggerReferenceTypeIds(requestIdsConverted)
+
+						logger.debug("VM:       " + result)
+						debuggerActor ! ByteString(JdwpCodecs.encodePacket(result.toJdwpPacket))
+					}
+				}
+
+				// TODO verify that input matches output aside from transormations
+//				val finalData = ByteString(JdwpCodecs.encodePacket(packetInfo.toJdwpPacket))
+//				if (data != finalData) {
+//					throw new RuntimeException(s"difference for $packetInfo, expected: $data, got: $finalData")
+//				}
 			}
+
 			stay
 		case Event(MainMessage.VmDisconnected, ()) =>
 			// TODO handle case where there are still messages awaitingResponse, effects EventRequestManager

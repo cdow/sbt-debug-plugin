@@ -99,8 +99,6 @@ class MainActor(debuggerPort: Int, vmPort: Int, logger: Logger) extends FSM[Main
 					case CommandInfo(id, command) =>
 						command match {
 							case set: EventRequest.Set => eventRequestManager.newEventRequest(id, set)
-							case EventRequest.Clear(eventKind, requestId) => eventRequestManager.clearEvent(requestId)
-							case EventRequest.ClearAllBreakpoints => eventRequestManager.clearAllEvents()
 							case _ => // do nothing
 						}
 					case ResponseInfo(id, _, data, command) =>
@@ -127,6 +125,18 @@ class MainActor(debuggerPort: Int, vmPort: Int, logger: Logger) extends FSM[Main
 						logger.debug("VM:       " + result)
 						debuggerActor ! ByteString(JdwpCodecs.encodePacket(result.toJdwpPacket))
 					}
+				}
+
+				// clear out recorded requestIds for clear events
+				// we do this at the end because we need these reuqestIds to convert to the VM ids first
+				packetInfo match {
+					case CommandInfo(id, command) =>
+						command match {
+							case EventRequest.Clear(eventKind, requestId) => eventRequestManager.clearEvent(requestId)
+							case EventRequest.ClearAllBreakpoints => eventRequestManager.clearAllEvents()
+							case _ => // do nothing
+						}
+					case ResponseInfo(_, _, _, _) => // do nothing
 				}
 
 				// TODO verify that input matches output aside from transormations

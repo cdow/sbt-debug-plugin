@@ -8,8 +8,8 @@ import scala.annotation.tailrec
 
 class ReferenceTypeIdManager(idSizes: IdSizes) {
 	// TODO return errors instead of putting in an incorrect id
-	val errorId = ReferenceTypeId(ByteVector.high(referenceTypeIdSize))
 	val referenceTypeIdSize = idSizes.referenceTypeId
+	val errorId = ReferenceTypeId(ByteVector.high(referenceTypeIdSize))
 	val nullId = ReferenceTypeId(ByteVector.low(referenceTypeIdSize))
 	var referenceTypeIdCount = increment(ByteVector.low(referenceTypeIdSize)) // increment because low is reserved for 'null'
 	var referenceTypeIdMapping = Map.empty[ReferenceTypeId, ReferenceTypeId] // VM -> debugger

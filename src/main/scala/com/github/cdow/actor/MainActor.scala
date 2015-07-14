@@ -101,13 +101,16 @@ class MainActor(debuggerPort: Int, vmPort: Int, logger: Logger) extends FSM[Main
 							case set: EventRequest.Set => eventRequestManager.newEventRequest(id, set)
 							case _ => // do nothing
 						}
-					case ResponseInfo(id, _, data, command) =>
-						command match {
-							case EventRequest.Set(_, _, _) =>
-								val decodedResponse = decodeEventRequestSet(data.toArray)
-								val vmRequestId = decodedResponse.requestID
-								eventRequestManager.eventRequestResponse(id, vmRequestId)
-							case _ => // do nothing
+					case ResponseInfo(id, error, data, command) =>
+						// TODO more general error handling
+						if(error == 0) {
+							command match {
+								case EventRequest.Set(_, _, _) =>
+									val decodedResponse = decodeEventRequestSet(data.toArray)
+									val vmRequestId = decodedResponse.requestID
+									eventRequestManager.eventRequestResponse(id, vmRequestId)
+								case _ => // do nothing
+							}
 						}
 				}
 
@@ -216,14 +219,18 @@ class MainActor(debuggerPort: Int, vmPort: Int, logger: Logger) extends FSM[Main
 					case other => other
 				}
 			case ri: ResponseInfo =>
-				ri.originalCommand match {
-					case _: EventRequest.Set =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeEventRequestSet(data.toArray)
-							val modifiedParsedData = eventRequestSetDataLens.modify(parsedData)(eventRequestManager.toDebuggerId)
-							ByteVector(encodeEventRequestSet(modifiedParsedData))
-						}
-					case _ => ri
+				if(ri.errorCode == 0) {
+					ri.originalCommand match {
+						case _: EventRequest.Set =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeEventRequestSet(data.toArray)
+								val modifiedParsedData = eventRequestSetDataLens.modify(parsedData)(eventRequestManager.toDebuggerId)
+								ByteVector(encodeEventRequestSet(modifiedParsedData))
+							}
+						case _ => ri
+					}
+				} else {
+					ri
 				}
 		}
 	}
@@ -281,82 +288,86 @@ class MainActor(debuggerPort: Int, vmPort: Int, logger: Logger) extends FSM[Main
 					case other => other
 				}
 			case ri: ResponseInfo =>
-				ri.originalCommand match {
-					case _: VirtualMachine.ClassesBySignature =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeVirtualMachineClassesBySignature(data.toArray)
-							val modifiedParsedData = parsedData.map { originalParsedData =>
-								originalParsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(originalParsedData.typeID))
+				if(ri.errorCode == 0) {
+					ri.originalCommand match {
+						case _: VirtualMachine.ClassesBySignature =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeVirtualMachineClassesBySignature(data.toArray)
+								val modifiedParsedData = parsedData.map { originalParsedData =>
+									originalParsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(originalParsedData.typeID))
+								}
+								ByteVector(encodeVirtualMachineClassesBySignature(modifiedParsedData))
 							}
-							ByteVector(encodeVirtualMachineClassesBySignature(modifiedParsedData))
-						}
-					case _: VirtualMachine.AllClasses =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeVirtualMachineAllClass(data.toArray)
-							val modifiedParsedData = parsedData.map { originalParsedData =>
-								originalParsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(originalParsedData.typeID))
+						case _: VirtualMachine.AllClasses =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeVirtualMachineAllClass(data.toArray)
+								val modifiedParsedData = parsedData.map { originalParsedData =>
+									originalParsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(originalParsedData.typeID))
+								}
+								ByteVector(encodeVirtualMachineAllClass(modifiedParsedData))
 							}
-							ByteVector(encodeVirtualMachineAllClass(modifiedParsedData))
-						}
-					case _: VirtualMachine.AllClassesWithGeneric =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeVirtualMachineAllClassWithGeneric(data.toArray)
-							val modifiedParsedData = parsedData.map { originalParsedData =>
-								originalParsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(originalParsedData.typeID))
+						case _: VirtualMachine.AllClassesWithGeneric =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeVirtualMachineAllClassWithGeneric(data.toArray)
+								val modifiedParsedData = parsedData.map { originalParsedData =>
+									originalParsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(originalParsedData.typeID))
+								}
+								ByteVector(encodeVirtualMachineAllClassWithGeneric(modifiedParsedData))
 							}
-							ByteVector(encodeVirtualMachineAllClassWithGeneric(modifiedParsedData))
-						}
-					case _: ReferenceType.NestedTypes =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeReferenceTypeNestedTypes(data.toArray)
-							val modifiedParsedData = parsedData.map { originalParsedData =>
-								originalParsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(originalParsedData.typeID))
+						case _: ReferenceType.NestedTypes =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeReferenceTypeNestedTypes(data.toArray)
+								val modifiedParsedData = parsedData.map { originalParsedData =>
+									originalParsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(originalParsedData.typeID))
+								}
+								ByteVector(encodeReferenceTypeNestedTypes(modifiedParsedData))
 							}
-							ByteVector(encodeReferenceTypeNestedTypes(modifiedParsedData))
-						}
-					case _: ReferenceType.Interfaces =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeReferenceTypeInterfaces(data.toArray)
-							val modifiedParsedData = parsedData.map { originalParsedData =>
-								interfaceIdLens.modify(originalParsedData)(referenceTypeIdManager.toDebuggerId)
+						case _: ReferenceType.Interfaces =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeReferenceTypeInterfaces(data.toArray)
+								val modifiedParsedData = parsedData.map { originalParsedData =>
+									interfaceIdLens.modify(originalParsedData)(referenceTypeIdManager.toDebuggerId)
+								}
+								ByteVector(encodeReferenceTypeInterfaces(modifiedParsedData))
 							}
-							ByteVector(encodeReferenceTypeInterfaces(modifiedParsedData))
-						}
-					case _: ClassType.Superclass =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeClassTypeSuperClass(data.toArray)
-							val modifiedParsedData = classIdLens.modify(parsedData)(referenceTypeIdManager.toDebuggerId)
-							ByteVector(encodeClassTypeSuperClass(modifiedParsedData))
-						}
-					case _: ObjectReference.ReferenceType =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeObjectReferenceReferenceType(data.toArray)
-							val modifiedParsedData = parsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(parsedData.typeID))
-							ByteVector(encodeObjectReferenceReferenceType(modifiedParsedData))
-						}
-					case _: ThreadReference.Frames =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeThreadReferenceFrames(data.toArray)
-							val modifiedParsedData = parsedData.map { frame =>
-								frame.copy(location = locationLens.modify(frame.location)(referenceTypeIdManager.toDebuggerId))
+						case _: ClassType.Superclass =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeClassTypeSuperClass(data.toArray)
+								val modifiedParsedData = classIdLens.modify(parsedData)(referenceTypeIdManager.toDebuggerId)
+								ByteVector(encodeClassTypeSuperClass(modifiedParsedData))
 							}
-							ByteVector(encodeThreadReferenceFrames(modifiedParsedData))
-						}
-					case _: ClassLoaderReference.VisibleClasses =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeClassLoaderReferenceVisibleClassses(data.toArray)
-							val modifiedParsedData = parsedData.map { originalParsedData =>
-								originalParsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(originalParsedData.typeID))
+						case _: ObjectReference.ReferenceType =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeObjectReferenceReferenceType(data.toArray)
+								val modifiedParsedData = parsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(parsedData.typeID))
+								ByteVector(encodeObjectReferenceReferenceType(modifiedParsedData))
 							}
-							ByteVector(encodeClassLoaderReferenceVisibleClasses(modifiedParsedData))
-						}
-					case _: ClassObjectReference.ReflectedType =>
-						responseInfoDataLens.modify(ri) { data =>
-							val parsedData = decodeClassObjectReferenceReflectedType(data.toArray)
-							val modifiedParsedData = parsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(parsedData.typeID))
-							ByteVector(encodeClassObjectReferenceReflectedType(modifiedParsedData))
-						}
-					case _ => ri
+						case _: ThreadReference.Frames =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeThreadReferenceFrames(data.toArray)
+								val modifiedParsedData = parsedData.map { frame =>
+									frame.copy(location = locationLens.modify(frame.location)(referenceTypeIdManager.toDebuggerId))
+								}
+								ByteVector(encodeThreadReferenceFrames(modifiedParsedData))
+							}
+						case _: ClassLoaderReference.VisibleClasses =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeClassLoaderReferenceVisibleClassses(data.toArray)
+								val modifiedParsedData = parsedData.map { originalParsedData =>
+									originalParsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(originalParsedData.typeID))
+								}
+								ByteVector(encodeClassLoaderReferenceVisibleClasses(modifiedParsedData))
+							}
+						case _: ClassObjectReference.ReflectedType =>
+							responseInfoDataLens.modify(ri) { data =>
+								val parsedData = decodeClassObjectReferenceReflectedType(data.toArray)
+								val modifiedParsedData = parsedData.copy(typeID = referenceTypeIdManager.toDebuggerId(parsedData.typeID))
+								ByteVector(encodeClassObjectReferenceReflectedType(modifiedParsedData))
+							}
+						case _ => ri
+					}
+				} else {
+					ri
 				}
 			}
 	}
